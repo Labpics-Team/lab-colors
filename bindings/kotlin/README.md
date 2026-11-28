@@ -114,6 +114,11 @@ Builder принадлежит одному вызывающему контек�
 и оставьте `tone` пустым. Выбор одной и той же кривой для вложенных слоёв
 связывает её с фактическим фоном каждого слоя.
 
+В `colorTarget(id, anchor, options, tone = pairs, from = port)` обе координаты
+пары могут быть `ProgramWireToneCoordinateV3.Lightness(value)` или
+`ProgramWireToneCoordinateV3.Swatch(rgb)`. Без `from` кривая читает подложку.
+Core вычисляет Oklab L образцов при компиляции.
+
 `pointOccurrence(id, paint, surface)` связывает краску с поверхностью.
 `occurrenceSurface` позволяет использовать результат слоя как следующую
 поверхность. `visibleSeparationHard(id, occurrence, minimum, maximum)` задаёт

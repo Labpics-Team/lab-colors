@@ -1,6 +1,8 @@
 package pics.lab.colors.conformance
 
 import pics.lab.colors.*
+import pics.lab.colors.ProgramWireToneCoordinateV3.Lightness
+import pics.lab.colors.ProgramWireToneCoordinateV3.Swatch
 
 private fun rgb(vararg channels: Int) = channels.map { it.toByte() }.toByteArray()
 private fun String.wireBytes() = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -275,6 +277,23 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
             runtime.updateObserved(revision.toULong() + 1uL, listOf(1u), rgb(gray, gray, gray), 1u).use { frame ->
                 check(frame.state() == "ready")
                 bytesEqual(ByteArray(3) { (255 - gray).toByte() }, frame.outputRgb(0u))
+            }
+        }
+    }
+    val swatches = listOf(Lightness(0.0) to Swatch(rgb(255, 255, 255)), Swatch(rgb(255, 0, 0)) to Swatch(rgb(34, 34, 34)),
+        Swatch(rgb(255, 255, 255)) to Lightness(0.0))
+    for ((from, name) in listOf(null to "sampledBackdropTone", 31u to "sampledInputTone")) {
+        val wire = graph(ProgramWireBuilderV3().apply {
+            colorTarget(21u, rgb(68, 68, 68), ProgramWireColorOptionsV3(appearance = 61u), tone = swatches, from = from)
+        }, contrast = false).compose(listOf(21u)).finish()
+        bytesEqual(requireNotNull(fixtures[name]).wireBytes(), wire)
+        compileProgramWire(wire, 1u).use { runtime ->
+            val samples = listOf(rgb(0, 0, 0) to 255, rgb(255, 0, 0) to 34, rgb(255, 255, 255) to 0, rgb(255, 0, 0) to 34)
+            for ((index, sample) in samples.withIndex()) {
+                runtime.updateObserved(index.toULong() + 1uL, listOf(1u), sample.first, 1u).use { frame ->
+                    check(frame.state() == "ready")
+                    bytesEqual(ByteArray(3) { sample.second.toByte() }, frame.outputRgb(0u))
+                }
             }
         }
     }

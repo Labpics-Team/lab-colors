@@ -152,10 +152,18 @@ function usePolicy(value = {}, owner) {
     const from = input === undefined ? undefined : inputSurface(input, owner, `${path}.tone.from`);
     const curve = array(read(tone, "curve", path), `${path}.tone.curve`, 2, MAX_SECTION_ENTRIES_V1)
       .map((point, i) => Object.freeze(array(point, `${path}.tone.curve[${i}]`, 2, 2)
-        .map((coordinate, j) => number(coordinate, `${path}.tone.curve[${i}][${j}]`, 0, 1))));
-    if (curve[0][0] !== 0 || curve.at(-1)[0] !== 1) authoringError(`${path}.tone.curve`, "input endpoints must be 0 and 1");
-    for (let i = 1; i < curve.length; i++) {
-      if (curve[i - 1][0] >= curve[i][0]) authoringError(`${path}.tone.curve`, "input coordinates must strictly increase");
+        .map((coordinate, j) => {
+          const coordinatePath = `${path}.tone.curve[${i}][${j}]`;
+          return typeof coordinate === "number"
+            ? number(coordinate, coordinatePath, 0, 1)
+            : authoredRgb(coordinate, coordinatePath);
+        })));
+    // Ordering swatches requires their Oklab projection in Core.
+    if (curve.every(([input]) => typeof input === "number")) {
+      if (curve[0][0] !== 0 || curve.at(-1)[0] !== 1) authoringError(`${path}.tone.curve`, "input endpoints must be 0 and 1");
+      for (let i = 1; i < curve.length; i++) {
+        if (curve[i - 1][0] >= curve[i][0]) authoringError(`${path}.tone.curve`, "input coordinates must strictly increase");
+      }
     }
     copiedTone = Object.freeze({ from, curve: Object.freeze(curve) });
   }

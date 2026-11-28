@@ -49,24 +49,30 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
       payload.u8(0);
     } else {
       const from = inputProperty(tone, "from", "tone");
-      if (from === undefined) {
-        if (visible === undefined) invalid("backdrop tone requires an appearance occurrence");
-        payload.u8(2);
-      } else {
-        payload.u8(1);
-        payload.u32(u32Value(from, "tone input"));
-      }
+      if (from === undefined && visible === undefined) invalid("backdrop tone requires an appearance occurrence");
+      const port = from === undefined ? undefined : u32Value(from, "tone input");
       const curve = candidateList(inputProperty(tone, "curve", "tone"), "tone curve")
         .map((point) => {
-          if (inputArrayLength(point, "tone point") !== 2) invalid("tone point must contain two numbers");
-          return indexedValues(point, 2, "tone point").map((value) => bounded(value, 1, "tone point"));
+          if (inputArrayLength(point, "tone point") !== 2) invalid("tone point must contain two coordinates");
+          return indexedValues(point, 2, "tone point").map((value) => typeof value === "number"
+            ? bounded(value, 1, "tone point") : { rgb: rgb24(value, "tone swatch") });
         });
-      if (curve.length < 2 || curve[0][0] !== 0 || curve.at(-1)[0] !== 1
-        || curve.some((point, index) => index > 0 && point[0] <= curve[index - 1][0])) {
+      if (curve.length < 2) invalid("tone curve requires at least two points");
+      if (curve.every(([x]) => typeof x === "number") && (curve[0][0] !== 0 || curve.at(-1)[0] !== 1
+        || curve.some((point, index) => index > 0 && point[0] <= curve[index - 1][0]))) {
         invalid("tone curve must span 0..1 with increasing input coordinates");
       }
+      const sampled = curve.some(([x, y]) => typeof x !== "number" || typeof y !== "number");
+      payload.u8((port === undefined ? 2 : 1) + (sampled ? 2 : 0));
+      if (port !== undefined) payload.u32(port);
       payload.u32(curve.length);
-      for (const point of curve) for (const value of point) payload.f64Bits(value);
+      for (const point of curve) {
+        if (sampled) payload.u8((typeof point[0] === "number" ? 0 : 1) | (typeof point[1] === "number" ? 0 : 2));
+        for (const value of point) {
+          if (typeof value === "number") payload.f64Bits(value);
+          else payload.rgb24(value.rgb);
+        }
+      }
     }
     const output = this.entry("targets");
     for (const byte of payload.bytes) output.u8(byte);

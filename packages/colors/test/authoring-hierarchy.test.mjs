@@ -57,6 +57,27 @@ test("backdrop tone follows the composed parent while explicit tone follows its 
   } finally { program.dispose(); }
 });
 
+test("swatches contribute only their Oklab lightness and projected inputs must increase", async () => {
+  const c = colors(), canvas = c.surface("canvas"), layer = c.role("layer", "#444444");
+  const curve = [[0, "#ffffff"], ["#ff0000", [34, 34, 34]], ["#ffffff", 0]];
+  const neutral = layer.on(canvas, { tone: { curve } });
+  const grayFromRed = layer.on(canvas, { tone: { from: canvas, curve: [[0, "#ff0000"], [1, "#ff0000"]] } });
+  const program = await c.compile({ neutral, grayFromRed });
+  try {
+    for (const [input, expected] of [["#000000", 255], ["#ff0000", 34], ["#ffffff", 0], ["#ff0000", 34]]) {
+      const frame = program.resolve({ canvas: input });
+      assert.equal(frame.state, "ready");
+      assert.deepEqual(frame.values.neutral.rgb, Array(3).fill(expected));
+      // Oklab L of sRGB red is about 0.628, closest to neutral sRGB8 136.
+      assert.deepEqual(frame.values.grayFromRed.rgb, [136, 136, 136]);
+    }
+  } finally { program.dispose(); }
+  for (const xs of [[0, "#ffffff", "#ff0000", 1], [0, "#ff0000", [255, 0, 0], 1], ["#ff0000", 1]]) {
+    const invalid = layer.on(canvas, { tone: { curve: xs.map((x) => [x, 0]) } });
+    await assert.rejects(c.compile({ invalid }), { code: "program_wire", operation: "compileProgramWire" });
+  }
+});
+
 test("declared surface tone survives inferred text contrast across nested themes", async () => {
   const c = colors({ reference: { canvas: "#ffffff" } }), canvas = c.surface("canvas");
   const tone = (dark, light) => ({ from: canvas, curve: [[0, dark], [0.25, dark], [1, light]] });

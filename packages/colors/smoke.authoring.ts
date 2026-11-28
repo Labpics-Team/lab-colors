@@ -6,7 +6,8 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   const neutral = c.role("label", "#242424", { domain: "neutral", identity: { lightness: [0, 1] } });
   const fill = accent.on(canvas, { separation: [0.04, 0.4] });
   const label = neutral.on(fill, { contrast: "wcag22-text" });
-  const pane = accent.on(canvas, { opacity: 0.8, tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  const pane = accent.on(canvas, { opacity: 0.8, tone: { from: canvas,
+    curve: [[0, 0.2], [[255, 0, 0], "#222222"], ["#ffffff", 0.95]] } });
   const fixed: ColorFixedRole = c.fixed("paper", "#f4eadb");
   const fixedPolicy: ColorFixedUsePolicy = { opacity: 0.8, contrast: "wcag22-ui", separation: [0.02, 2] };
   const fixedUse = fixed.on(canvas, fixedPolicy);
