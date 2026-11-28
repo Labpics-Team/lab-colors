@@ -20,11 +20,11 @@
       "sha256": "6e1d5311dda3078d96755a237e948d593c054352f83d4de945ee8afa7ca393bf"
     },
     {
-      "bytes": 10424,
+      "bytes": 10850,
       "license": "MIT",
       "path": "crates/labcolors-core/src/appearance/execution_cone.rs",
       "role": "appearance_execution_cone_source",
-      "sha256": "0730691de9669b04b169c222790b6bc1cad87a26fdbb336a78e61128a0e02844"
+      "sha256": "d8df444e5fdcbe94c5b8704ed550199dbf4cf78362561a61c5ab89c733a3c21a"
     },
     {
       "bytes": 103636,
