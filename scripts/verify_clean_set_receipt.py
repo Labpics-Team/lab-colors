@@ -138,6 +138,9 @@ PRODUCT_ARTIFACT_PATHS = {
     "srgb8_source": "crates/labcolors-core/src/srgb8.rs",
     "verifier_source": "scripts/verify_clean_set_receipt.py",
     "verifier_tests": "scripts/test_verify_clean_set_receipt.py",
+    "wcag22_measurement_source": "crates/labcolors-core/src/wcag22.rs",
+    "wcag22_kernel_source": "crates/labcolors-core/src/wcag22/kernel.rs",
+    "wcag22_luminance_table_source": "crates/labcolors-core/src/wcag22/q55_data.rs",
 }
 
 PRODUCT_ARTIFACT_LICENSES = {
