@@ -148,45 +148,45 @@ impl CompiledDependencyPlanV1 {
 
         let n = sorted_ids.len();
 
-        // Build forward CSR: for each node, list of dependencies (successors in edge direction).
-        let mut fwd_offsets: Vec<usize> = vec![0; n + 1];
-        for &(fi, _ti) in &edge_pairs {
-            fwd_offsets[fi + 1] += 1;
-        }
-        for i in 1..=n {
-            fwd_offsets[i] = fwd_offsets[i]
-                .checked_add(fwd_offsets[i - 1])
-                .ok_or(CompileErrorV1::OffsetOverflow)?;
-        }
-        let mut forward_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
-        let mut cursor = fwd_offsets.clone();
+        // The sorted pairs are already forward CSR order. Count both directions
+        // once, then retain only the packed edges and their offsets.
+        let mut fwd_offsets = vec![0usize; n + 1];
+        let mut in_degree = vec![0u32; n];
         for &(fi, ti) in &edge_pairs {
-            let pos = cursor[fi];
-            forward_edges[pos] = NodeIndexV1::new(ti as u32);
-            cursor[fi] += 1;
-        }
-
-        // Topological sort (Kahn's algorithm) — also detects cycles.
-        let mut in_degree: Vec<u32> = vec![0; n];
-        for &(_fi, ti) in &edge_pairs {
+            fwd_offsets[fi + 1] += 1;
             in_degree[ti] += 1;
         }
-        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-        for (i, &deg) in in_degree.iter().enumerate().take(n) {
+        let mut reverse_offsets = vec![0usize; n + 1];
+        for i in 0..n {
+            fwd_offsets[i + 1] = fwd_offsets[i + 1]
+                .checked_add(fwd_offsets[i])
+                .ok_or(CompileErrorV1::OffsetOverflow)?;
+            reverse_offsets[i + 1] = reverse_offsets[i]
+                .checked_add(in_degree[i] as usize)
+                .ok_or(CompileErrorV1::OffsetOverflow)?;
+        }
+        let forward_edges: Vec<NodeIndexV1> = edge_pairs
+            .into_iter()
+            .map(|(_, ti)| NodeIndexV1::new(ti as u32))
+            .collect();
+
+        // Kahn's FIFO is itself the topological order. Appending discovered
+        // nodes and advancing a cursor avoids a second work queue.
+        let mut topo_order: Vec<usize> = Vec::with_capacity(n);
+        for (i, &deg) in in_degree.iter().enumerate() {
             if deg == 0 {
-                queue.push_back(i);
+                topo_order.push(i);
             }
         }
-        let mut topo_order: Vec<usize> = Vec::with_capacity(n);
-        while let Some(node) = queue.pop_front() {
-            topo_order.push(node);
-            let start = fwd_offsets[node];
-            let end = fwd_offsets[node + 1];
-            for edge in &forward_edges[start..end] {
+        let mut head = 0;
+        while head < topo_order.len() {
+            let node = topo_order[head];
+            head += 1;
+            for edge in &forward_edges[fwd_offsets[node]..fwd_offsets[node + 1]] {
                 let succ = edge.raw() as usize;
                 in_degree[succ] -= 1;
                 if in_degree[succ] == 0 {
-                    queue.push_back(succ);
+                    topo_order.push(succ);
                 }
             }
         }
@@ -194,42 +194,21 @@ impl CompiledDependencyPlanV1 {
             return Err(CompileErrorV1::CycleDetected);
         }
 
-        // Build packed reverse adjacency: reverse_offsets[i..i+1] gives
-        // the slice of reverse_edges containing predecessors of node i.
-        // Predecessors stored in topological order for deterministic traversal.
-        let mut rev_counts: Vec<usize> = vec![0; n];
-        for &(_fi, ti) in &edge_pairs {
-            rev_counts[ti] += 1;
+        // Every target's predecessor list is a subsequence of topo_order.
+        // Filling in that order gives exactly the canonical reverse CSR
+        // without another global edge sort or a rank array.
+        let mut reverse_edges = vec![NodeIndexV1::new(0); forward_edges.len()];
+        let mut rev_cursor = reverse_offsets[..n].to_vec();
+        for fi in topo_order {
+            for edge in &forward_edges[fwd_offsets[fi]..fwd_offsets[fi + 1]] {
+                let ti = edge.raw() as usize;
+                let pos = rev_cursor[ti];
+                reverse_edges[pos] = NodeIndexV1::new(fi as u32);
+                rev_cursor[ti] += 1;
+            }
         }
-        let mut reverse_offsets: Vec<usize> = vec![0; n + 1];
-        for i in 0..n {
-            reverse_offsets[i + 1] = reverse_offsets[i]
-                .checked_add(rev_counts[i])
-                .ok_or(CompileErrorV1::OffsetOverflow)?;
-        }
-        let mut reverse_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
-
-        // Sort edge_pairs by (topo_rank[target], topo_rank[source]) for deterministic
-        // predecessor ordering without intermediate allocation.
-        let mut topo_rank: Vec<usize> = vec![0; n];
-        for (rank, &node) in topo_order.iter().enumerate() {
-            topo_rank[node] = rank;
-        }
-        edge_pairs.sort_unstable_by_key(|&(fi, ti)| (topo_rank[ti], topo_rank[fi]));
-
-        // Populate reverse_edges in one pass from sorted edge_pairs.
-        let mut rev_cursor = reverse_offsets.clone();
-        for &(fi, ti) in &edge_pairs {
-            let pos = rev_cursor[ti];
-            reverse_edges[pos] = NodeIndexV1::new(fi as u32);
-            rev_cursor[ti] += 1;
-        }
-
-        // Terminal outputs: nodes with no dependents (nothing depends on them).
-        // In our edge convention (A,B) means A depends on B, so forward_edges[A] = [B].
-        // Terminal outputs are nodes that nobody depends on → reverse degree == 0.
         let terminal_outputs: Vec<NodeIndexV1> = (0..n)
-            .filter(|&i| rev_counts[i] == 0)
+            .filter(|&i| reverse_offsets[i] == reverse_offsets[i + 1])
             .map(|i| NodeIndexV1::new(i as u32))
             .collect();
 
@@ -277,7 +256,7 @@ impl CompiledDependencyPlanV1 {
     ///
     /// Returns `Err` if the scratch buffer is too small or if reverse edge data
     /// is corrupt (index out of range). Both conditions indicate a caller error
-    /// or data corruption respectively — never silently ignored.
+    /// or data corruption respectively вЂ” never silently ignored.
     ///
     /// Callers can reuse both buffers across multiple calls.
     pub fn affected_nodes_with_scratch(
@@ -293,48 +272,57 @@ impl CompiledDependencyPlanV1 {
                 got: visited.len(),
             });
         }
-        // Reset visited bitset.
-        for v in visited.iter_mut().take(n) {
-            *v = false;
-        }
+        let visited = &mut visited[..n];
+        visited.fill(false);
         stack.clear();
 
         for &idx in changed {
             let i = idx.raw() as usize;
-            if i < n && !visited[i] {
-                visited[i] = true;
+            if let Some(seen) = visited.get_mut(i)
+                && !*seen
+            {
+                *seen = true;
                 stack.push(idx);
             }
         }
 
-        let mut result_indices: Vec<usize> = Vec::new();
+        let mut result = Vec::new();
         while let Some(node) = stack.pop() {
             let ni = node.raw() as usize;
-            result_indices.push(ni);
+            result.push(node);
             let start = self.reverse_offsets[ni];
             let end = self.reverse_offsets[ni + 1];
-            for j in start..end {
-                let dep = self.reverse_edges[j];
+            for &dep in &self.reverse_edges[start..end] {
                 let di = dep.raw() as usize;
-                if di >= n {
-                    return Err(CompileErrorV1::CorruptReverseEdge {
+                let seen = visited
+                    .get_mut(di)
+                    .ok_or(CompileErrorV1::CorruptReverseEdge {
                         index: di,
                         node_count: n,
-                    });
-                }
-                if !visited[di] {
-                    visited[di] = true;
+                    })?;
+                if !*seen {
+                    *seen = true;
                     stack.push(dep);
                 }
             }
         }
 
-        // Sort by index for deterministic output.
-        result_indices.sort_unstable();
-        Ok(result_indices
-            .into_iter()
-            .map(|i| NodeIndexV1::new(i as u32))
-            .collect())
+        // A sparse cone is cheaper to sort; a dense cone is cheaper to
+        // enumerate in canonical order from the already populated flags.
+        // Compare the linear scan to the comparison-sort work estimate.
+        let k = result.len();
+        if k > 1 && k.saturating_mul(k.ilog2() as usize) > n {
+            result.clear();
+            result.extend(
+                visited
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &seen)| seen.then_some(NodeIndexV1::new(i as u32))),
+            );
+        } else {
+            result.sort_unstable();
+        }
+        Ok(result)
     }
 
     /// Compute the diff between a full resolve and the current state.
@@ -369,7 +357,7 @@ pub struct ResolvedSnapshotDiffV1 {
     /// Count of outputs that remained unchanged and can reuse prior evidence.
     unchanged_count: usize,
     /// Outputs whose retained evidence passed cheap recheck and need no re-resolve.
-    /// Capability marker — actual recheck logic belongs to Session/runtime, not the plan.
+    /// Capability marker вЂ” actual recheck logic belongs to Session/runtime, not the plan.
     recheck_passed: Box<[NodeIndexV1]>,
 }
 
@@ -385,7 +373,7 @@ impl ResolvedSnapshotDiffV1 {
     }
 
     /// Outputs whose retained evidence passed cheap recheck and need no re-resolve.
-    /// Empty by default — actual recheck logic belongs to Session/runtime.
+    /// Empty by default вЂ” actual recheck logic belongs to Session/runtime.
     pub fn recheck_passed(&self) -> &[NodeIndexV1] {
         &self.recheck_passed
     }

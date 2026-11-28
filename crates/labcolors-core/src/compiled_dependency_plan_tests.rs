@@ -36,7 +36,7 @@ fn duplicate_edge_rejection() {
 }
 
 /// Diamond: 0 depends on 1 and 2; 1 and 2 both depend on 3.
-/// Edge (A, B) means "A depends on B" → forward_edges[A] contains B.
+/// Edge (A, B) means "A depends on B" в†’ forward_edges[A] contains B.
 /// reverse_edges[B] contains A (nodes that depend on B).
 /// Changing node 3 must affect all four nodes via reverse-cone traversal.
 #[test]
@@ -44,7 +44,7 @@ fn selective_update_matches_full_resolve_on_diamond_graph() {
     let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (0, 2), (1, 3), (2, 3)])
         .expect("diamond must compile");
 
-    // Change leaf dependency 3 → everything depends on it transitively.
+    // Change leaf dependency 3 в†’ everything depends on it transitively.
     let affected = plan.affected_nodes(&[NodeIndexV1::new(3)]);
     let affected_raw: Vec<u32> = affected.iter().map(|n| n.raw()).collect();
 
@@ -70,7 +70,7 @@ fn selective_update_matches_full_resolve_on_diamond_graph() {
         "all nodes must be affected in diamond when root changes"
     );
 
-    // Change node 1 → only 0 and 1 affected (not 2 or 3).
+    // Change node 1 в†’ only 0 and 1 affected (not 2 or 3).
     let affected_1 = plan.affected_nodes(&[NodeIndexV1::new(1)]);
     let affected_1_raw: Vec<u32> = affected_1.iter().map(|n| n.raw()).collect();
     assert!(affected_1_raw.contains(&1));
@@ -85,21 +85,21 @@ fn selective_update_matches_full_resolve_on_diamond_graph() {
     );
 }
 
-// ─── Sabotage controls ───────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Sabotage controls в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Each test documents the specific mutant class it kills.
 // Edge convention: (A, B) means "A depends on B".
 // forward_edges[A] = [B, ...] = A's dependencies.
 // reverse_edges[B] = [A, ...] = nodes that depend on B.
-// affected_nodes(changed) = changed ∪ transitive dependents via reverse_edges.
+// affected_nodes(changed) = changed в€Є transitive dependents via reverse_edges.
 
 /// MUTANT CLASS: replacing selective traversal with full-table scan.
 /// If affected_nodes returned ALL nodes regardless of input, this test fails
 /// because changing a node with no dependents should affect only itself.
-/// Chain: 0→1→2→3 (each depends on next). Node 3 has no dependents.
+/// Chain: 0в†’1в†’2в†’3 (each depends on next). Node 3 has no dependents.
 #[test]
 fn sabotage_full_table_scan_detected() {
     // 0 depends on 1, 1 depends on 2, 2 depends on 3.
-    // reverse_edges: [3]→[2], [2]→[1], [1]→[0], [0]→[]
+    // reverse_edges: [3]в†’[2], [2]в†’[1], [1]в†’[0], [0]в†’[]
     // Node 0 has NO dependents (nothing depends on 0).
     let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (1, 2), (2, 3)])
         .expect("chain must compile");
@@ -115,7 +115,7 @@ fn sabotage_full_table_scan_detected() {
 
 /// MUTANT CLASS: omitting transitive dependents from affected set.
 /// If traversal stops at depth 1, distant dependents would be missing.
-/// Chain: 3→2→1→0 (3 depends on 2, 2 on 1, 1 on 0).
+/// Chain: 3в†’2в†’1в†’0 (3 depends on 2, 2 on 1, 1 on 0).
 /// Changing 0 must affect {0, 1, 2, 3} transitively.
 #[test]
 fn sabotage_missing_transitive_dependent_detected() {
@@ -145,7 +145,7 @@ fn sabotage_semantic_name_branching_detected() {
     let plan = CompiledDependencyPlanV1::compile(&[100, 200, 300], &[(300, 200), (200, 100)])
         .expect("non-sequential IDs must compile");
 
-    // Canonical indices: 100→0, 200→1, 300→2.
+    // Canonical indices: 100в†’0, 200в†’1, 300в†’2.
     // Changing index 0 (ID 100): dependents are 1 (200) and 2 (300).
     let affected = plan.affected_nodes(&[NodeIndexV1::new(0)]);
     assert_eq!(
@@ -160,19 +160,19 @@ fn sabotage_semantic_name_branching_detected() {
 /// with each plan's structure, not stale cached output from another plan.
 #[test]
 fn sabotage_byte_equality_stale_reuse_detected() {
-    // Plan A: chain 0→1→2 (0 depends on 1, 1 depends on 2).
-    // reverse_edges: [2]←{1}, [1]←{0}, [0]←{}.
+    // Plan A: chain 0в†’1в†’2 (0 depends on 1, 1 depends on 2).
+    // reverse_edges: [2]в†ђ{1}, [1]в†ђ{0}, [0]в†ђ{}.
     // Changing node 2 affects {2, 1, 0} transitively.
     let plan_a =
         CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (1, 2)]).expect("must compile");
 
-    // Plan B: star 0→1, 0→2 (0 depends on both 1 and 2; 1 and 2 are independent).
-    // reverse_edges: [1]←{0}, [2]←{0}, [0]←{}.
+    // Plan B: star 0в†’1, 0в†’2 (0 depends on both 1 and 2; 1 and 2 are independent).
+    // reverse_edges: [1]в†ђ{0}, [2]в†ђ{0}, [0]в†ђ{}.
     // Changing node 2 affects {2, 0} (not 1).
     let plan_b =
         CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (0, 2)]).expect("must compile");
 
-    // Change node 2 on both plans — different topologies yield different affected sets.
+    // Change node 2 on both plans вЂ” different topologies yield different affected sets.
     let changed = [NodeIndexV1::new(2)];
     let affected_a = plan_a.affected_nodes(&changed);
     let affected_b = plan_b.affected_nodes(&changed);
@@ -223,7 +223,7 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
     let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (0, 2), (1, 3), (2, 3)])
         .expect("diamond must compile");
 
-    // Change node 3 (deepest dependency) → all nodes affected, including terminal 0.
+    // Change node 3 (deepest dependency) в†’ all nodes affected, including terminal 0.
     let affected = plan.affected_nodes(&[NodeIndexV1::new(3)]);
     let diff = plan.compute_snapshot_diff(&affected);
 
@@ -243,7 +243,7 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
         "recheck_passed is a capability marker, empty by default"
     );
 
-    // Change node 0 (terminal output itself, no dependents) → only 0 affected.
+    // Change node 0 (terminal output itself, no dependents) в†’ only 0 affected.
     let affected_leaf = plan.affected_nodes(&[NodeIndexV1::new(0)]);
     let diff_leaf = plan.compute_snapshot_diff(&affected_leaf);
 
@@ -253,7 +253,7 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
 }
 
 /// Snapshot diff with two independent terminal outputs.
-/// Graph: 0→1 and 2→3 (two disjoint chains).
+/// Graph: 0в†’1 and 2в†’3 (two disjoint chains).
 /// Terminals: 0 and 2 (nobody depends on them).
 /// Changing node 1 affects only output 0; output 2 remains unchanged.
 #[test]
@@ -265,7 +265,7 @@ fn snapshot_diff_two_independent_terminals_partial_change() {
     let terminals = plan.terminal_outputs();
     assert_eq!(terminals.len(), 2);
 
-    // Change node 1 → affects {1, 0} (chain 0→1), not {2, 3}.
+    // Change node 1 в†’ affects {1, 0} (chain 0в†’1), not {2, 3}.
     let affected = plan.affected_nodes(&[NodeIndexV1::new(1)]);
     let diff = plan.compute_snapshot_diff(&affected);
 
@@ -299,7 +299,7 @@ fn scratch_api_resets_visited_state_between_calls() {
     assert_eq!(a.len(), 3);
 
     // Second call: changing 2 (leaf) affects only itself.
-    // Visited buffer must have been reset — stale bits from first call
+    // Visited buffer must have been reset вЂ” stale bits from first call
     // would cause incorrect results.
     let b = plan
         .affected_nodes_with_scratch(&[NodeIndexV1::new(2)], &mut visited, &mut stack)
@@ -373,4 +373,80 @@ fn dependents_of_returns_none_for_invalid_index() {
     assert!(plan.dependents_of(NodeIndexV1::new(0)).is_some());
     assert!(plan.dependents_of(NodeIndexV1::new(1)).is_some());
     assert!(plan.dependents_of(NodeIndexV1::new(99)).is_none());
+}
+
+/// Predecessors are ordered by the same FIFO topological traversal, not IDs.
+#[test]
+fn reverse_csr_preserves_topological_predecessor_order() {
+    let plan =
+        CompiledDependencyPlanV1::compile(&[3, 0, 2, 1], &[(0, 1), (3, 0), (2, 1)]).expect("DAG");
+    assert_eq!(
+        plan.dependents_of(NodeIndexV1::new(1)).unwrap(),
+        &[NodeIndexV1::new(2), NodeIndexV1::new(0)]
+    );
+    let same = CompiledDependencyPlanV1::compile(&[1, 2, 3, 0], &[(2, 1), (3, 0), (0, 1)])
+        .expect("same DAG");
+    assert_eq!(plan, same);
+}
+
+/// Compare every query against a fixed-point oracle, across sparse and dense
+/// cones, duplicates, unknown roots, and reused oversized scratch storage.
+#[test]
+fn canonical_cones_match_fixed_point_oracle() {
+    const N: usize = 96;
+    let ids: Vec<u32> = (0..N as u32).collect();
+    let mut random = 0x8105_1027_4816_1234u64;
+    for density in [1u64, 5, 23] {
+        let mut edges = Vec::new();
+        // Permute the topological order relative to the canonical indices.
+        for i in 0..N {
+            for j in i + 1..N {
+                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (random >> 32) % 29 < density {
+                    edges.push((((i * 17) % N) as u32, ((j * 17) % N) as u32));
+                }
+            }
+        }
+        let plan = CompiledDependencyPlanV1::compile(&ids, &edges).unwrap();
+        let mut visited = vec![true; N + 1];
+        let mut stack = Vec::new();
+        for seed in 0..N {
+            let changed = [
+                NodeIndexV1::new(seed as u32),
+                NodeIndexV1::new(seed as u32),
+                NodeIndexV1::new(N as u32),
+            ];
+            let mut expected = [false; N];
+            expected[seed] = true;
+            loop {
+                let mut progress = false;
+                for &(from, to) in &edges {
+                    if expected[to as usize] && !expected[from as usize] {
+                        expected[from as usize] = true;
+                        progress = true;
+                    }
+                }
+                if !progress {
+                    break;
+                }
+            }
+            let expected: Vec<_> = expected
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &seen)| seen.then_some(NodeIndexV1::new(i as u32)))
+                .collect();
+            assert_eq!(
+                plan.affected_nodes_with_scratch(&changed, &mut visited, &mut stack)
+                    .unwrap(),
+                expected
+            );
+            assert!(stack.is_empty());
+            assert!(visited[N], "scratch outside the plan is not modified");
+        }
+        assert!(
+            plan.affected_nodes_with_scratch(&[], &mut visited, &mut stack)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
