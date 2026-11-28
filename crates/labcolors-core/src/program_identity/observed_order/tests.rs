@@ -109,35 +109,76 @@ fn observed_order_distinguishes_joint_correlations_with_equal_column_multisets()
 }
 
 #[test]
-fn observed_order_retains_every_rgb_channel_byte() {
+fn observed_joint_order_retains_every_rgb_channel_byte() {
     let peer = peers(&[0, 1], false);
     for channel in 0..3 {
         let mut identities = std::collections::HashSet::new();
         for byte in 0..=255 {
             let mut value = [37, 83, 149];
             value[channel] = byte;
+            let other = [211, 191, 173];
             let matrix = [
                 [[0; 3], [0; 3]],
-                [value, [211, 191, 173]],
+                [value, other],
+                [other, value],
                 [[255; 3], [255; 3]],
             ];
-            assert!(identities.insert(identity(&observed(&peer, &[0, 1, 2], &matrix))));
+            assert!(identities.insert(identity(&observed(&peer, &[0, 1, 2, 3], &matrix))));
         }
     }
     let red = [
         [[0; 3], [0; 3]],
         [[1, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [1, 0, 0]],
         [[255; 3], [255; 3]],
     ];
     let green = [
         [[0; 3], [0; 3]],
         [[0, 1, 0], [0, 0, 0]],
+        [[0, 0, 0], [0, 1, 0]],
         [[255; 3], [255; 3]],
     ];
     assert_ne!(
-        identity(&observed(&peer, &[0, 1, 2], &red)),
-        identity(&observed(&peer, &[0, 1, 2], &green))
+        identity(&observed(&peer, &[0, 1, 2, 3], &red)),
+        identity(&observed(&peer, &[0, 1, 2, 3], &green))
     );
+}
+
+#[test]
+fn distinct_marginals_anchor_ports_without_joint_row_vertices() {
+    let matrix = [
+        [[0; 3], [0; 3]],
+        [[37, 83, 149], [37, 83, 150]],
+        [[255; 3], [255; 3]],
+    ];
+    let cases = [0, 1, 2];
+    let baseline = observed(&peers(&[0, 1], false), &cases, &matrix);
+    assert_eq!(baseline.vertex_count(), 4);
+    assert_eq!(baseline.edge_count(), 2);
+    let expected = identity(&baseline);
+    for input_order in [[0, 1], [1, 0]] {
+        for reverse_vertices in [false, true] {
+            let peer = peers(&input_order, reverse_vertices);
+            let graph = observed(&peer, &[2, 0, 1], &matrix);
+            assert_eq!(identity(&graph), expected);
+            let form = canonical_form(&graph, b"observed-peer-test\0").unwrap();
+            let a = peer
+                .inputs
+                .iter()
+                .find(|&(input, _)| *input == 0)
+                .unwrap()
+                .1;
+            let b = peer
+                .inputs
+                .iter()
+                .find(|&(input, _)| *input == 1)
+                .unwrap()
+                .1;
+            assert!(
+                form.order.iter().position(|&v| v == a) < form.order.iter().position(|&v| v == b)
+            );
+        }
+    }
 }
 
 #[test]
@@ -151,6 +192,48 @@ fn observed_order_allocates_channels_per_port_and_rows_per_case() {
         .expect("ports have different observations");
     assert_eq!(graph.vertex_count(), 2 * count + 3 * count + cases.len());
     assert_eq!(graph.edge_count(), count + 3 * count * (cases.len() + 1));
+}
+
+#[test]
+#[ignore = "explicit 64-port, 512-case canonicalization measurement"]
+fn observed_order_canonicalizes_distinct_large_marginals() {
+    let count = 64;
+    let mut cases: Vec<_> = (0..512).collect();
+    let mut inputs: Vec<_> = (0..count).collect();
+    // All columns have the same extrema, but each has a different interior
+    // RGB multiset. The full row graph is unnecessary for execution order.
+    let rgb = |case: usize, input: usize| {
+        Ok(match case {
+            0 => [0; 3],
+            511 => [255; 3],
+            _ => [1 + input as u8, (case % 251) as u8, (case / 2) as u8],
+        })
+    };
+    let mut expected = None;
+    for reverse in [false, true] {
+        let started = std::time::Instant::now();
+        let peer = peers(&inputs, reverse);
+        let graph = peer.observed_graph(&cases, rgb).unwrap().unwrap();
+        let prepared = started.elapsed();
+        assert_eq!(graph.vertex_count(), 2 * count);
+        assert_eq!(graph.edge_count(), count);
+        let form = identity(&graph);
+        eprintln!(
+            "observed-marginals reverse={reverse} ports={count} cases={} vertices={} edges={} prepare={prepared:?} total={:?} preimage_bytes={}",
+            cases.len(),
+            graph.vertex_count(),
+            graph.edge_count(),
+            started.elapsed(),
+            form.len(),
+        );
+        if let Some(expected) = &expected {
+            assert_eq!(&form, expected);
+        } else {
+            expected = Some(form);
+        }
+        cases.reverse();
+        inputs.reverse();
+    }
 }
 
 #[test]

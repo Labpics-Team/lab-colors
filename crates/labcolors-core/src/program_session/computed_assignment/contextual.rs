@@ -93,7 +93,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v8.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.shared-certified-point-tone-and-source.sorted-operational-transport.immutable-expression-cancellation.observed-component-order.joint-domain-bounds.single-assessment-per-region.substitution-equivalent-leaf-variables.measured-incumbent-recovery\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v9.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.shared-certified-point-tone-and-source.sorted-operational-transport.immutable-expression-cancellation.observed-component-order.exact-marginal-refinement.joint-domain-bounds.single-assessment-per-region.substitution-equivalent-leaf-variables.measured-incumbent-recovery\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);

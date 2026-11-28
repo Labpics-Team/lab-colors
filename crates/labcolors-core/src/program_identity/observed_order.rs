@@ -226,6 +226,9 @@ impl PeerSearchGraph {
                 break;
             }
         }
+        if needs_rows && refine_distinct_marginals(&mut colors, &ties, cases, &rgb)? {
+            needs_rows = false;
+        }
         let mut edges =
             try_collect_program(self.edges.len(), self.edges.iter().copied()).map_err(|_| ())?;
         if needs_rows {
@@ -271,4 +274,62 @@ impl PeerSearchGraph {
         }
         ColoredGraph::new(colors, edges).map(Some).map_err(|_| ())
     }
+}
+
+/// A row permutation preserves the multiset of every input's RGB tuples.
+/// Refine tied input colours by those exact multisets. If two remaining tied
+/// columns differ on any row, their correlation with the other columns is
+/// essential: retain the original graph and encode the complete joint rows.
+/// Otherwise every colour-preserving automorphism of the refined static
+/// graph preserves the observation matrix pointwise on the input columns.
+fn refine_distinct_marginals(
+    colors: &mut [VertexColorV1],
+    ties: &[(usize, usize)],
+    cases: &[usize],
+    rgb: &impl Fn(usize, usize) -> Result<[u8; 3], ()>,
+) -> Result<bool, ()> {
+    let mut refinements = Vec::new();
+    refinements.try_reserve_exact(ties.len()).map_err(|_| ())?;
+    for group in ties.chunk_by(|a, b| colors[a.1] == colors[b.1]) {
+        if group.len() == 1 {
+            refinements.push((group[0].1, 0_u32));
+            continue;
+        }
+        // The temporary matrix for this one tied class stores only RGB bytes.
+        let mut columns = Vec::new();
+        columns.try_reserve_exact(group.len()).map_err(|_| ())?;
+        for &(input, vertex) in group {
+            let mut values = Vec::new();
+            values.try_reserve_exact(cases.len()).map_err(|_| ())?;
+            for &case in cases {
+                values.push(rgb(case, input)?);
+            }
+            ordering::sort(&mut values);
+            columns.push((input, vertex, values));
+        }
+        ordering::sort_by(&mut columns, |a, b| a.2.cmp(&b.2));
+        let mut rank = 0_u32;
+        for (index, (input, vertex, values)) in columns.iter().enumerate() {
+            if let Some((previous, _, previous_values)) = index.checked_sub(1).map(|i| &columns[i])
+            {
+                if values != previous_values {
+                    rank = rank.checked_add(1).ok_or(())?;
+                } else {
+                    for &case in cases {
+                        if rgb(case, *input)? != rgb(case, *previous)? {
+                            // Do not install any partial refinement on this path.
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+            refinements.push((*vertex, rank));
+        }
+    }
+    for (vertex, rank) in refinements {
+        colors[vertex]
+            .push_bytes(&rank.to_be_bytes())
+            .map_err(|_| ())?;
+    }
+    Ok(true)
 }
