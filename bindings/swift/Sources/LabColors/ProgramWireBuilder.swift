@@ -451,6 +451,11 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
         try selectionV3(targets, reference: options.reference, tag: 5)
     }
 
+    /// Balances reference uses on physically independent backdrops.
+    @discardableResult public func composeReference(_ targets: [UInt32], reference: [ProgramWireReferenceInputV3]) throws -> Self {
+        try selectionV3(targets, reference: reference, tag: 6)
+    }
+
     private func selectionV3(_ targets: [UInt32], reference: [ProgramWireReferenceInputV3]?, tag: UInt8) throws -> Self {
         guard targets.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
         try selection { b in

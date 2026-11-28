@@ -1995,6 +1995,10 @@ impl DraftV1 {
         self.inner.set_assignment(order);
     }
 
+    pub(crate) fn set_reference_composition(&mut self, targets: Vec<TargetId>) {
+        self.inner.set_reference_composition(targets);
+    }
+
     pub(crate) fn set_composition(&mut self, legacy_reference_order: Vec<TargetId>) {
         self.inner.set_composition(legacy_reference_order);
     }

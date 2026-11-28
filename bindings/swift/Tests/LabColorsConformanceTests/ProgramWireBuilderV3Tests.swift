@@ -115,6 +115,10 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         let targets: [UInt32] = [0x01020304, 0xffffffff, 0]
         let reference = [ProgramWireReferenceInputV3(port: 0x10203040, rgb: [1, 128, 255]),
             ProgramWireReferenceInputV3(port: 0xffffffff, rgb: [254, 129, 0])]
+        var peers = try ProgramWireBuilderV3().composeReference(targets, reference: reference).finish()
+        XCTAssertEqual(peers[26], 7)
+        peers[26] = 6
+        XCTAssertEqual(peers, try bytes(expected.composeReference))
         let cases: [([UInt32], [ProgramWireReferenceInputV3]?, String, UInt8)] = [
             (targets, nil, expected.compose, 5), (targets, reference, expected.composeReference, 6),
             ([], nil, expected.composeEmpty, 5), ([], [], expected.composeReferenceEmpty, 6),

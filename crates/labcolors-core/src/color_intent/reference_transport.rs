@@ -20,6 +20,84 @@ pub(crate) fn luminance(rgb: Srgb8) -> f64 {
         + RELATIVE_LUMINANCE_BLUE_WEIGHT * linear[2]
 }
 
+fn q55_luminance(rgb: Srgb8) -> crate::wcag22::Wcag22LuminanceBoundsQ55V1 {
+    crate::wcag22::measure_wcag22_srgb8(rgb.bytes(), [0; 3]).foreground_luminance
+}
+
+fn normative_luminance_bounds(rgb: Srgb8) -> [f64; 2] {
+    let bounds = q55_luminance(rgb);
+    let scale = crate::wcag22::Wcag22LuminanceBoundsQ55V1::scale() as f64;
+    [
+        next_down(bounds.lower() as f64 / scale).max(0.0),
+        next_up(bounds.upper() as f64 / scale).min(1.0),
+    ]
+}
+
+// Bridge the two luminance models without inventing a threshold tolerance.
+// Both are sums of three independent byte contributions. Enclose the error
+// of every contribution against the proof-bound Q55 artifact and account for
+// the two rounded additions (absolute rounding error <= EPSILON below 2).
+static LUMINANCE_MODEL_ERROR: std::sync::LazyLock<f64> = std::sync::LazyLock::new(|| {
+    let mut total = 0.0;
+    let mut max_sum = 0.0;
+    for channel in 0..3 {
+        let mut maximum = 0.0_f64;
+        let mut channel_max = 0.0_f64;
+        for byte in 0..=u8::MAX {
+            let mut rgb = [0; 3];
+            rgb[channel] = byte;
+            let rgb = Srgb8::new(rgb);
+            let actual = luminance(rgb);
+            if !actual.is_finite() || actual < 0.0 {
+                return f64::INFINITY;
+            }
+            channel_max = channel_max.max(actual);
+            let [lo, hi] = normative_luminance_bounds(rgb);
+            maximum = maximum.max(next_up((actual - lo).abs().max((hi - actual).abs())));
+        }
+        total = next_up(total + maximum);
+        max_sum = next_up(max_sum + channel_max);
+    }
+    if max_sum >= 2.0 {
+        return f64::INFINITY;
+    }
+    next_up(total + 2.0 * f64::EPSILON)
+});
+
+/// Necessary operational-luminance limits for a weak occurrence satisfying a
+/// WCAG contrast floor on an uncertain common backdrop. On the lighter side
+/// its luminance must be >= result[0]; on the darker side <= result[1].
+/// Outward arithmetic retains every normative pass, including near thresholds.
+pub(crate) fn wcag_weak_luminance_limits(
+    backdrop: [Srgb8; 2],
+    criterion: crate::wcag22::Wcag22CriterionV1,
+) -> [f64; 2] {
+    let twice_minimum = i128::from(crate::wcag22::twice_minimum_contrast(criterion));
+    let scale = i128::from(crate::wcag22::Wcag22LuminanceBoundsQ55V1::scale());
+    let offset = (twice_minimum - 2) * scale;
+    let error = *LUMINANCE_MODEL_ERROR;
+    // A passing normative contrast separates the luminances by at least
+    // (minimum - 1) / 20. If the bridge cannot preserve that polarity,
+    // the propagation must be disabled rather than guess the orientation.
+    let gap = next_down((offset / 40) as f64 / scale as f64);
+    if 2.0 * error >= gap {
+        return [0.0, 1.0];
+    }
+    let lo = i128::from(q55_luminance(backdrop[0]).lower());
+    let hi = i128::from(q55_luminance(backdrop[1]).upper());
+    // Clearing denominators from (L + 1/20) / (D + 1/20) >= t/2
+    // gives 40 L >= 20 t D + (t - 2) S, with S the Q55 scale.
+    // Floor the necessary lighter limit and ceil the darker limit on this
+    // integer lattice before crossing into binary64; negative limits are
+    // intentional and prove the respective polarity infeasible.
+    let factor = 20 * twice_minimum;
+    let lighter_q55 = (factor * lo + offset) / 40;
+    let darker_q55 = (40 * hi - offset + factor - 1).div_euclid(factor);
+    let lighter = next_down(lighter_q55 as f64 / scale as f64);
+    let darker = next_up(darker_q55 as f64 / scale as f64);
+    [next_down(lighter - error), next_up(darker + error)]
+}
+
 pub(crate) fn contrast_ratio(visible: Srgb8, backdrop: Srgb8) -> f64 {
     relative_luminance_ratio(luminance(visible), luminance(backdrop))
 }
@@ -407,6 +485,66 @@ impl Interval {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normative_contrast_limits_retain_every_passing_neutral_pair_and_chromatic_sample() {
+        use crate::wcag22::{
+            Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1,
+            evaluate_wcag22_srgb8,
+        };
+
+        let check = |foreground: Srgb8, backdrop: Srgb8, criterion| {
+            let result = evaluate_wcag22_srgb8(foreground.bytes(), backdrop.bytes(), criterion)
+                .expect("finite sRGB8 assessment");
+            if matches!(
+                result,
+                Wcag22AssessmentV1::Evaluated {
+                    decision: Wcag22ApplicableDecisionV1::Pass,
+                    ..
+                }
+            ) {
+                let [lighter, darker] = wcag_weak_luminance_limits([backdrop; 2], criterion);
+                let y = luminance(foreground);
+                match polarity(foreground, backdrop) {
+                    TonalPolarityV1::Lighter => assert!(
+                        lighter <= y,
+                        "{foreground:?} {backdrop:?} {criterion:?}: {lighter} > {y}"
+                    ),
+                    TonalPolarityV1::Darker => assert!(
+                        y <= darker,
+                        "{foreground:?} {backdrop:?} {criterion:?}: {y} > {darker}"
+                    ),
+                    TonalPolarityV1::Equal => {
+                        panic!("passing pair has equal operational luminance")
+                    }
+                }
+            }
+        };
+        assert!(LUMINANCE_MODEL_ERROR.is_finite());
+        for criterion in Wcag22CriterionV1::ALL {
+            for foreground in 0..=u8::MAX {
+                for backdrop in 0..=u8::MAX {
+                    check(
+                        Srgb8::new([foreground; 3]),
+                        Srgb8::new([backdrop; 3]),
+                        criterion,
+                    );
+                }
+            }
+            for sample in 0..=u32::from(u16::MAX) {
+                let a = sample.wrapping_mul(0x9e37_79b9).to_le_bytes();
+                let b = sample
+                    .wrapping_mul(0x85eb_ca6b)
+                    .wrapping_add(17)
+                    .to_be_bytes();
+                check(
+                    Srgb8::new([a[0], a[1], a[2]]),
+                    Srgb8::new([b[1], b[2], b[3]]),
+                    criterion,
+                );
+            }
+        }
+    }
 
     #[test]
     fn neutral_inverse_has_independent_exact_cubic_cases() {

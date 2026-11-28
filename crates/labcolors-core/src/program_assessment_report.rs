@@ -156,6 +156,13 @@ pub enum ProgramSelectionModeV1 {
     OrderedV1,
     JointPointV1,
     OrderedReferenceV1,
+    JointReferencePeersV1,
+}
+
+impl ProgramSelectionModeV1 {
+    pub(crate) fn symmetric(self) -> bool {
+        matches!(self, Self::JointPointV1 | Self::JointReferencePeersV1)
+    }
 }
 
 /// Применения с общим правилом выбора и объёмом поиска. Имена и псевдонимы

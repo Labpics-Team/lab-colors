@@ -3,7 +3,10 @@
 //! contain actual backdrop values and prior paints from the compared tuple,
 //! never the incidental state of the DFS cursor.
 
+use super::reference_completion::PreparedPointSelectionV1;
 use super::*;
+
+mod peers;
 use crate::color_intent::reference_transport::{
     ReferenceTransportV1, contrast_ratio, luminance, polarity,
 };
@@ -12,6 +15,7 @@ use crate::program_wire::{
     ProgramReferenceCapacityV1, ProgramReferenceCaseV1, ProgramReferencePreferenceV1,
     ProgramReferenceSelectionV1,
 };
+use peers::PeerProfiles;
 use std::collections::{BinaryHeap, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -114,7 +118,8 @@ impl PartialEq for CapacityPriorityV1 {
 }
 impl Eq for CapacityPriorityV1 {}
 
-struct ReferenceRuntimeV1<'a> {
+struct ReferenceRuntimeV1<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
+    peers: Option<PeerProfiles<'a, 'p, 'program, 'scratch, E>>,
     context: ContextV1<'a>,
     models: Vec<Option<ReferenceTransportV1>>,
     evidence: SearchEvidenceV1,
@@ -198,14 +203,14 @@ fn tonal_proposals(anchor: Srgb8, domain: AssignmentDomainV1) -> impl Iterator<I
 }
 
 fn polish_plan(
-    targets: impl IntoIterator<Item = (Srgb8, AssignmentDomainV1)>,
+    targets: impl IntoIterator<Item = (usize, Srgb8, AssignmentDomainV1)>,
     maximum: usize,
 ) -> Result<Vec<(usize, Srgb8)>, ()> {
     let mut proposals = Vec::new();
     if maximum == 0 {
         return Ok(proposals);
     }
-    for (target, (anchor, domain)) in targets.into_iter().enumerate() {
+    for (target, anchor, domain) in targets {
         for source in tonal_proposals(anchor, domain) {
             if proposals.is_empty() {
                 proposals.try_reserve_exact(maximum).map_err(|_| ())?;
@@ -246,9 +251,10 @@ fn terminal_proposals_count_only_distinct_admitted_sources() {
 #[test]
 fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     let anchor = Srgb8::new([128; 3]);
-    let targets = std::iter::once((anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })).chain(
-        std::iter::once_with(|| panic!("the reserve needs no later target")),
-    );
+    let targets = std::iter::once((0, anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 }))
+        .chain(std::iter::once_with(|| {
+            panic!("the reserve needs no later target")
+        }));
     assert_eq!(
         polish_plan(targets, 3).expect("bounded proposal storage"),
         (0..=2)
@@ -258,6 +264,7 @@ fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     let (empty, allocations) = crate::test_support::measured_allocator_events(|| {
         polish_plan(
             [(
+                0,
                 anchor,
                 AssignmentDomainV1::Cube {
                     lower: [0, 0, 1],
@@ -279,13 +286,18 @@ fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     );
 }
 
-impl<'a> ReferenceRuntimeV1<'a> {
-    fn new<E: ProgramConstraintEvaluatorSetV1>(
+impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
+    ReferenceRuntimeV1<'a, 'p, 'program, 'scratch, E>
+{
+    fn new(
         selection: &'a ComputedSelectionV1,
-        component: &'a ComputedComponentV1,
-        scenarios: NonEmptyScenarioSetV1<'_>,
+        observation: LocalObservationV1<'a, '_>,
+        order: Option<&'a identity::ObservedComponentOrder>,
+        prepared: Option<&'p mut PreparedPointSelectionV1<'program, 'scratch, E>>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+        let component = observation.component;
+        let scenarios = observation.scenarios;
+        let context = ContextV1::for_observation::<E>(selection, observation, order)?;
         let count = context.targets.len();
         let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         let cells = count
@@ -302,11 +314,22 @@ impl<'a> ReferenceRuntimeV1<'a> {
                     .map(|backdrop| ReferenceTransportV1::new(target.effective_anchor(), backdrop)),
             );
         }
+        let peers = match (component.mode, prepared) {
+            (ProgramSelectionModeV1::JointReferencePeersV1, Some(prepared)) => {
+                Some(PeerProfiles::new(&context, component, prepared)?)
+            }
+            (ProgramSelectionModeV1::JointReferencePeersV1, None) | (_, Some(_)) => {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            _ => None,
+        };
         Ok(Self {
+            peers,
             context,
             models,
             evidence: SearchEvidenceV1 {
                 completion: CompletionV1::BudgetExhausted,
+                numerical_order_unresolved: false,
                 visited: 0,
                 regions: 0,
                 points: 0,
@@ -624,6 +647,36 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(())
     }
 
+    fn retain_peer_tuple(
+        &mut self,
+        values: &[Srgb8],
+        points: &[AppearancePointV1],
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+        if let Some(peers) = &mut self.peers {
+            let improved = peers.consider(&self.context, points, values)?;
+            if improved {
+                if let Some(best) = self.best {
+                    self.pending[best].values.copy_from_slice(values);
+                } else {
+                    pushed(
+                        &mut self.pending,
+                        PendingPointV1 {
+                            values: cloned(values).map_err(allocation)?,
+                            capacities: cloned(&self.scratch_capacities).map_err(allocation)?,
+                            keys: Vec::new(),
+                            revision: 0,
+                        },
+                    )
+                    .map_err(allocation)?;
+                    self.best = Some(0);
+                }
+            }
+            return Ok(());
+        }
+        Err(ProgramSessionEvaluationError::InternalInvariant)
+    }
+
     fn retain_tuple(&mut self, values: &[Srgb8], points: &[AppearancePointV1]) -> Result<(), ()> {
         self.scratch_capacities.fill(None);
         self.scratch_keys.fill(TargetKeyV1::default());
@@ -720,29 +773,30 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(())
     }
 
-    fn assess_tuple<E: ProgramConstraintEvaluatorSetV1>(
+    fn assess_tuple(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
-        values: &[Srgb8],
+        values: &mut [Srgb8],
         arena: &mut ProgramEvaluationArenaV1<E>,
     ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         self.assess_tuple_inner(runtime, epoch, scenarios, values, arena, false)
     }
 
-    fn assess_tuple_inner<E: ProgramConstraintEvaluatorSetV1>(
+    fn assess_tuple_inner(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
-        values: &[Srgb8],
+        values: &mut [Srgb8],
         arena: &mut ProgramEvaluationArenaV1<E>,
         probe: bool,
     ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         if self.evidence.visited >= self.budget {
             return Ok(None);
         }
+        self.context.expand_sources(values);
         self.evidence.visited += 1;
         self.evidence.points += 1;
         self.evidence.examined += 1;
@@ -788,9 +842,14 @@ impl<'a> ReferenceRuntimeV1<'a> {
         }
         if failures == 0 {
             let points = std::mem::take(&mut self.appearance);
-            let result = self.retain_tuple(values, &points);
+            let result = if self.peers.is_some() {
+                self.retain_peer_tuple(values, &points)
+            } else {
+                self.retain_tuple(values, &points)
+                    .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)
+            };
             self.appearance = points;
-            result.map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            result?;
         }
         Ok(Some(failures))
     }
@@ -1029,7 +1088,8 @@ impl<'a> ReferenceRuntimeV1<'a> {
         key
     }
 
-    fn region_cannot_improve(&self, bounds: &BoundsV1) -> bool {
+    fn region_cannot_improve(&mut self, bounds: &BoundsV1) -> bool {
+        debug_assert!(self.peers.is_none(), "joint peers use product regions");
         let Some(best) = self.best else {
             return false;
         };
@@ -1057,7 +1117,212 @@ impl<'a> ReferenceRuntimeV1<'a> {
             != Ordering::Less
     }
 
-    fn step<E: ProgramConstraintEvaluatorSetV1>(
+    fn joint_region(
+        &mut self,
+        bounds: &mut BoundsV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        domains: &[AssignmentDomainV1],
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let domain_at = |index| domains[self.context.target_representative(index)];
+        let possible =
+            bounds.may_pass_domains(&self.context, runtime, epoch, scenarios, domain_at)?;
+        self.evidence.endpoint_evaluations = bounds.evaluations;
+        if !possible {
+            return Ok(false);
+        }
+        let peers = self.peers.as_mut().expect("joint reference component");
+        Ok(!peers.lower_profile(&self.context, bounds, domain_at)?)
+    }
+
+    // Subdivide the product of source domains, keeping all other domains
+    // as intervals. A surface and its dependents can therefore be narrowed
+    // together before any one paint is fixed. Both children are disjoint and
+    // cover their parent. Branch ranking is the same conservative sorted
+    // objective used to reject a region, independent of the incumbent.
+    fn joint_search(
+        &mut self,
+        bounds: &mut BoundsV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+        struct Split {
+            target: usize,
+            parent: AssignmentDomainV1,
+            sibling: Option<AssignmentDomainV1>,
+        }
+        let mut domains = cloned(&self.context.domains).map_err(allocation)?;
+        let count = domains.len();
+        let depth = domains
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.context.represents_target(*index))
+            .map(|(_, domain)| domain)
+            .try_fold(0_usize, |sum, domain| sum.checked_add(domain.split_depth()))
+            .ok_or_else(|| allocation(()))?;
+        let mut stack = Vec::<Split>::new();
+        stack.try_reserve_exact(depth).map_err(|_| allocation(()))?;
+        let mut first_profile =
+            buffer(count.checked_mul(4).ok_or_else(|| allocation(()))?, 0.0).map_err(allocation)?;
+        let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
+        let maximum_polish_work = ((0..count)
+            .filter(|&index| self.context.represents_target(index))
+            .count() as u64)
+            .saturating_mul(256)
+            .min(self.budget / COORDINATE_BUDGET_DIVISOR);
+        let mut polish_proposals = None;
+
+        self.evidence.visited += 1;
+        self.evidence.regions += 1;
+        self.evidence.open_regions += 1;
+        let mut active = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+        if !active {
+            self.evidence.close_region().map_err(allocation)?;
+        }
+        loop {
+            if !active {
+                // Undo the preceding split, or activate its still-open sibling.
+                // Only the modified domain is stored on the stack.
+                while let Some(frame) = stack.last_mut() {
+                    if let Some(sibling) = frame.sibling.take() {
+                        domains[frame.target] = sibling;
+                        // The sibling was already assessed when its split was
+                        // created. Its open status is not a feasibility or
+                        // optimality claim. Apply new incumbent and case
+                        // information to its children (or fully assess a leaf).
+                        // Each product region is assessed once, within budget.
+                        active = true;
+                        break;
+                    } else {
+                        domains[frame.target] = frame.parent;
+                        stack.pop();
+                    }
+                }
+                if !active {
+                    debug_assert_eq!(self.evidence.open_regions, 0);
+                    self.evidence.completion = CompletionV1::Complete;
+                    return Ok(());
+                }
+            }
+
+            let remaining = self.budget - self.evidence.visited;
+            if self.best.is_some() && remaining <= maximum_polish_work {
+                if polish_proposals.is_none() {
+                    polish_proposals = Some(
+                        polish_plan(
+                            self.context
+                                .targets
+                                .iter()
+                                .zip(&self.context.domains)
+                                .enumerate()
+                                .filter(|(index, _)| self.context.represents_target(*index))
+                                .map(|(index, (target, &domain))| {
+                                    (index, target.declaration.anchor, domain)
+                                }),
+                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                        )
+                        .map_err(allocation)?,
+                    );
+                }
+                if remaining <= polish_proposals.as_ref().expect("prepared reserve").len() as u64 {
+                    break;
+                }
+            }
+            if remaining == 0 {
+                break;
+            }
+            // Resolve the highest-priority explicit tone domains first, then
+            // balance subdivision depth within each objective tier. Leaving
+            // a tone unconstrained while refining lower-priority dependent
+            // uses spends work on compositions whose tone can be improved.
+            let split = domains
+                .iter()
+                .enumerate()
+                .filter(|(index, domain)| {
+                    self.context.represents_target(*index) && domain.split_depth() != 0
+                })
+                .max_by_key(|(index, domain)| {
+                    (
+                        self.context.targets[*index].tone_input.is_some(),
+                        domain.split_depth(),
+                        std::cmp::Reverse(*index),
+                    )
+                });
+            let Some((target, &parent)) = split else {
+                for (value, domain) in values.iter_mut().zip(&domains) {
+                    *value = Srgb8::new(domain.bounds().0);
+                }
+                self.assess_tuple_inner(runtime, epoch, scenarios, &mut values, arena, true)?;
+                self.evidence.close_region().map_err(allocation)?;
+                active = false;
+                continue;
+            };
+            if remaining < 2 {
+                break;
+            }
+            self.evidence.visited += 2;
+            self.evidence.regions += 2;
+            self.evidence.open_regions += 2;
+            self.evidence.close_region().map_err(allocation)?;
+            let (left, right) = parent.split();
+            domains[target] = left;
+            let left_possible = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+            if left_possible {
+                first_profile.copy_from_slice(
+                    self.peers
+                        .as_ref()
+                        .expect("joint reference component")
+                        .current_profile(),
+                );
+            } else {
+                self.evidence.close_region().map_err(allocation)?;
+            }
+            domains[target] = right;
+            let right_possible = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+            if !right_possible {
+                self.evidence.close_region().map_err(allocation)?;
+            }
+            let (first, sibling) = match (left_possible, right_possible) {
+                (false, false) => {
+                    domains[target] = parent;
+                    active = false;
+                    continue;
+                }
+                (true, false) => (left, None),
+                (false, true) => (right, None),
+                (true, true) => {
+                    let right_profile = self
+                        .peers
+                        .as_ref()
+                        .expect("joint reference component")
+                        .current_profile();
+                    if peers::compare(&first_profile, right_profile) == Ordering::Greater {
+                        (right, Some(left))
+                    } else {
+                        (left, Some(right))
+                    }
+                }
+            };
+            domains[target] = first;
+            stack.push(Split {
+                target,
+                parent,
+                sibling,
+            });
+        }
+        // Unvisited regions remain open. Local improvement never changes
+        // the evidence for completeness or skips the full acceptance check.
+        if let Some(proposals) = polish_proposals.as_deref() {
+            self.polish(runtime, epoch, scenarios, arena, proposals)?;
+        }
+        Ok(())
+    }
+
+    fn step(
         &mut self,
         capacity: Option<usize>,
         bounds: &mut BoundsV1,
@@ -1193,7 +1458,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
                             runtime,
                             epoch,
                             scenarios,
-                            &job.values,
+                            &mut job.values,
                             arena,
                             true,
                         )?;
@@ -1229,7 +1494,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(progressed)
     }
 
-    fn polish<E: ProgramConstraintEvaluatorSetV1>(
+    fn polish(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
@@ -1257,7 +1522,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
             // move has made it the current source. This fixed work set is
             // exactly what the scheduler reserves; each visit is assessed.
             values[target] = source;
-            self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+            self.assess_tuple_inner(runtime, epoch, scenarios, &mut values, arena, true)?;
         }
         Ok(())
     }
@@ -1266,6 +1531,9 @@ impl<'a> ReferenceRuntimeV1<'a> {
         let Some(best) = self.best else {
             return false;
         };
+        if let Some(peers) = &self.peers {
+            return peers.authored_exact();
+        }
         let point = &self.pending[best];
         point
             .values
@@ -1278,8 +1546,9 @@ impl<'a> ReferenceRuntimeV1<'a> {
     fn reference_reports(
         &self,
         selected: usize,
+        target_order: impl IntoIterator<Item = usize>,
     ) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
-        reports(&self.context, &self.appearance, |target| {
+        reports(&self.context, &self.appearance, target_order, |target| {
             Ok(self.pending[selected].capacities[target].map(|index| {
                 let capacity = &self.capacities[index];
                 ProgramReferenceCapacityV1 {
@@ -1295,6 +1564,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
 fn reports(
     context: &ContextV1<'_>,
     appearance: &[AppearancePointV1],
+    target_order: impl IntoIterator<Item = usize>,
     mut capacity: impl FnMut(usize) -> Result<Option<ProgramReferenceCapacityV1>, ()>,
 ) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
     let count = context.targets.len();
@@ -1308,7 +1578,8 @@ fn reports(
                 .count(),
         )
         .map_err(|_| ())?;
-    for (target, compiled) in context.targets.iter().enumerate() {
+    for target in target_order {
+        let compiled = &context.targets[target];
         let Some(backdrop) = compiled.reference_backdrop else {
             continue;
         };
@@ -1388,7 +1659,7 @@ pub(super) fn reports_for_values<E: ProgramConstraintEvaluatorSetV1>(
         &mut scores,
         &mut appearance,
     )?;
-    reports(context, &appearance, capacity).map_err(allocation)
+    reports(context, &appearance, 0..context.targets.len(), capacity).map_err(allocation)
 }
 
 fn observe_selected<E: ProgramConstraintEvaluatorSetV1>(
@@ -1414,17 +1685,17 @@ pub(in crate::program_session::computed_assignment) fn refresh_reports<
     E: ProgramConstraintEvaluatorSetV1,
 >(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     values: &[Srgb8],
     previous: &[ProgramReferenceSelectionV1],
 ) -> Result<
     std::sync::Arc<[ProgramReferenceSelectionV1]>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
 > {
-    let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+    let scenarios = observation.scenarios;
+    let context = ContextV1::for_observation::<E>(selection, observation, None)?;
     // Capacity and search completeness describe the same local support. Case
     // indexes and appearances describe this observation and must be rebuilt.
     let mut previous = previous.iter();
@@ -1448,23 +1719,46 @@ fn point_box_distance(point: [f64; 3], lower: [f64; 3], upper: [f64; 3]) -> f64 
     (d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]
 }
 
-pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
+#[allow(clippy::too_many_arguments)]
+pub(in crate::program_session::computed_assignment) fn select_component<
+    E: ProgramConstraintEvaluatorSetV1,
+>(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
+    prepared: Option<&mut PreparedPointSelectionV1<'_, '_, E>>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let component = observation.component;
+    let scenarios = observation.scenarios;
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
-    let mut search = ReferenceRuntimeV1::new::<E>(selection, component, scenarios)?;
+    let mut order = if let Some(graph) = &component.peer_graph {
+        graph
+            .order(&observation.cases.order, scenarios)
+            .map_err(allocation)?
+    } else {
+        None
+    };
+    if let Some(order) = order
+        .as_mut()
+        .filter(|_| component.point_equivalence.is_some())
+    {
+        order
+            .constraints
+            .retain(|index| component.point_constraints().contains(index));
+    }
+    let mut search = ReferenceRuntimeV1::new(selection, observation, order.as_ref(), prepared)?;
     let count = search.context.targets.len();
     let mut authored = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     for (value, target) in authored.iter_mut().zip(search.context.targets.iter()) {
         *value = target.declaration.anchor;
     }
     let mut working = cloned(&authored).map_err(allocation)?;
-    search.assess_tuple(runtime, epoch, scenarios, &working, arena)?;
+    search.assess_tuple(runtime, epoch, scenarios, &mut working, arena)?;
+    if let Some(peers) = &mut search.peers {
+        peers.prepare(&search.context, &search.appearance);
+    }
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
     if !search.authored_exact() && search.evidence.visited < search.budget {
         let seed_limit = (search.budget / COORDINATE_BUDGET_DIVISOR).max(search.evidence.visited);
@@ -1474,8 +1768,10 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut proposal = cloned(&working).map_err(allocation)?;
         if search.best.is_none() && count >= 2 {
             let targets = search.context.targets;
-            let proposals = component
-                .constraints
+            let proposals = search
+                .context
+                .constraint_indices
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
                 .iter()
                 .filter_map(|&index| paired_tones(targets, &epoch.constraints[index]))
                 .flatten();
@@ -1485,7 +1781,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 proposal.copy_from_slice(&authored);
                 proposal[left] = first;
                 proposal[right] = second;
-                search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?;
+                search.assess_tuple(runtime, epoch, scenarios, &mut proposal, arena)?;
             }
         }
         let mut current_hard_failures =
@@ -1498,6 +1794,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             .try_reserve_exact(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         for (target, compiled) in search.context.targets.iter().enumerate() {
+            if !search.context.represents_target(target) {
+                continue;
+            }
             let depth = compiled
                 .appearance
                 .map(|slot| {
@@ -1516,7 +1815,8 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             siblings.reverse();
         }
         let sibling_orders = 1 + usize::from(opposite_siblings != repair_order);
-        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[count - 1].0);
+        let coordinates = repair_order.len();
+        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[coordinates - 1].0);
         let trajectories = sibling_orders * depth_orders;
         let starts = search
             .context
@@ -1547,6 +1847,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 let case = search.context.local_cases.order[(seed - 1) / 2];
                 let direction = if seed % 2 == 1 { -1 } else { 1 };
                 for target in 0..count {
+                    if !search.context.represents_target(target) {
+                        continue;
+                    }
                     let point = initial_appearance[case * count + target];
                     seed_values[target] = if search.models[target].is_some() {
                         let preferred = search
@@ -1566,7 +1869,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             working.copy_from_slice(&seed_values);
             let mut current_failures = search
-                .assess_tuple_inner(runtime, epoch, scenarios, &working, arena, true)?
+                .assess_tuple_inner(runtime, epoch, scenarios, &mut working, arena, true)?
                 .unwrap_or(usize::MAX);
             if current_failures == 0 {
                 continue;
@@ -1588,9 +1891,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             let downstream_first = trajectory < sibling_orders;
             'repair: for pass in 0.. {
                 let mut changed = false;
-                for position in 0..count {
+                for position in 0..coordinates {
                     let coordinate = if (pass % 2 == 0) == downstream_first {
-                        count - 1 - position
+                        coordinates - 1 - position
                     } else {
                         position
                     };
@@ -1620,7 +1923,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         }
                         let case_count = search.context.case_refinement.borrow().cases.len();
                         let Some(failures) = search.assess_tuple_inner(
-                            runtime, epoch, scenarios, &proposal, arena, true,
+                            runtime,
+                            epoch,
+                            scenarios,
+                            &mut proposal,
+                            arena,
+                            true,
                         )?
                         else {
                             break 'repair;
@@ -1644,7 +1952,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                             }
                             current_failures = search
                                 .assess_tuple_inner(
-                                    runtime, epoch, scenarios, &working, arena, true,
+                                    runtime,
+                                    epoch,
+                                    scenarios,
+                                    &mut working,
+                                    arena,
+                                    true,
                                 )?
                                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                             // Current already failed on the old probe, a subset
@@ -1697,8 +2010,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let constraints =
             region_constraints(epoch, search.context.constraint_indices).map_err(allocation)?;
         let mut bounds = BoundsV1 {
-            constraint_lower: buffer(constraints.len(), RegionPointV1::default())
-                .map_err(allocation)?,
+            constraint_lower: buffer(constraints.len(), None).map_err(allocation)?,
             constraints,
             lower: buffer(count, [0; 3]).map_err(allocation)?,
             scores: buffer(count, 0.0).map_err(allocation)?,
@@ -1710,125 +2022,136 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     .map_err(allocation)?,
             ),
         };
-        let initial = if let Some(best) = search.best {
-            cloned(&search.pending[best].values)
+        if search.peers.is_some() {
+            search.joint_search(&mut bounds, runtime, epoch, scenarios, arena)?;
         } else {
-            cloned(&authored)
-        }
-        .map_err(allocation)?;
-        let point_job = search.traversal(0, &initial).map_err(allocation)?;
-        pushed(&mut search.jobs, point_job).map_err(allocation)?;
-        // A capacity query and the outer search advance in the same scheduler
-        // and spend the same node budget. A short quantum prevents an unknown
-        // context from blocking discovery of a better feasible composition.
-        let mut capacity_steps = 0_u8;
-        let maximum_polish_work = if count > 1 {
-            (count as u64)
-                .saturating_mul(256)
-                .min(search.budget / COORDINATE_BUDGET_DIVISOR)
-        } else {
-            0
-        };
-        let mut polish_proposals = None;
-        while search.evidence.visited < search.budget {
-            if maximum_polish_work != 0
-                && search.best.is_some()
-                && search.budget - search.evidence.visited <= maximum_polish_work
-            {
-                if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
-                    break;
-                }
-                // Most complete searches never reach this reserve. When one
-                // does, cache only the executable prefix, at most a quarter
-                // of the shared budget. Counting and execution reuse the RGBs.
-                if polish_proposals.is_none() {
-                    polish_proposals = Some(
-                        polish_plan(
-                            search
-                                .context
-                                .targets
-                                .iter()
-                                .zip(&search.context.domains)
-                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
-                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
-                        )
-                        .map_err(allocation)?,
-                    );
-                }
-                if search.budget - search.evidence.visited
-                    <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
-                {
-                    break;
-                }
-            }
-            let needed = search.needed_capacity().map_err(allocation)?;
-            let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
-            let mut progressed = if run_point {
-                capacity_steps = 0;
-                search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?
-            } else if let Some(capacity) = needed {
-                capacity_steps = capacity_steps.saturating_add(1);
-                search.step(
-                    Some(capacity),
-                    &mut bounds,
-                    runtime,
-                    epoch,
-                    scenarios,
-                    arena,
-                )?
+            let initial = if let Some(best) = search.best {
+                cloned(&search.pending[best].values)
             } else {
-                break;
+                cloned(&authored)
+            }
+            .map_err(allocation)?;
+            let point_job = search.traversal(0, &initial).map_err(allocation)?;
+            pushed(&mut search.jobs, point_job).map_err(allocation)?;
+            // A capacity query and the outer search advance in the same scheduler
+            // and spend the same node budget. A short quantum prevents an unknown
+            // context from blocking discovery of a better feasible composition.
+            let mut capacity_steps = 0_u8;
+            let maximum_polish_work = if count > 1 {
+                (count as u64)
+                    .saturating_mul(256)
+                    .min(search.budget / COORDINATE_BUDGET_DIVISOR)
+            } else {
+                0
             };
-            if !progressed {
-                // Splitting a region or extending a partial tuple needs two
-                // visits. The other traversal may still evaluate a leaf with
-                // the final visit, and that tuple may replace the current best.
-                if run_point {
-                    if let Some(capacity) = needed {
-                        capacity_steps = capacity_steps.saturating_add(1);
-                        progressed = search.step(
-                            Some(capacity),
-                            &mut bounds,
-                            runtime,
-                            epoch,
-                            scenarios,
-                            arena,
-                        )?;
+            let mut polish_proposals = None;
+            while search.evidence.visited < search.budget {
+                if maximum_polish_work != 0
+                    && search.best.is_some()
+                    && search.budget - search.evidence.visited <= maximum_polish_work
+                {
+                    if search.point_closed
+                        && search.needed_capacity().map_err(allocation)?.is_none()
+                    {
+                        break;
                     }
-                } else if !search.point_closed {
+                    // Most complete searches never reach this reserve. When one
+                    // does, cache only the executable prefix, at most a quarter
+                    // of the shared budget. Counting and execution reuse the RGBs.
+                    if polish_proposals.is_none() {
+                        polish_proposals = Some(
+                            polish_plan(
+                                search
+                                    .context
+                                    .targets
+                                    .iter()
+                                    .zip(&search.context.domains)
+                                    .enumerate()
+                                    .map(|(index, (target, &domain))| {
+                                        (index, target.declaration.anchor, domain)
+                                    }),
+                                usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                            )
+                            .map_err(allocation)?,
+                        );
+                    }
+                    if search.budget - search.evidence.visited
+                        <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
+                    {
+                        break;
+                    }
+                }
+                let needed = search.needed_capacity().map_err(allocation)?;
+                let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
+                let mut progressed = if run_point {
                     capacity_steps = 0;
-                    progressed =
-                        search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?;
+                    search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?
+                } else if let Some(capacity) = needed {
+                    capacity_steps = capacity_steps.saturating_add(1);
+                    search.step(
+                        Some(capacity),
+                        &mut bounds,
+                        runtime,
+                        epoch,
+                        scenarios,
+                        arena,
+                    )?
+                } else {
+                    break;
+                };
+                if !progressed {
+                    // Splitting a region or extending a partial tuple needs two
+                    // visits. The other traversal may still evaluate a leaf with
+                    // the final visit, and that tuple may replace the current best.
+                    if run_point {
+                        if let Some(capacity) = needed {
+                            capacity_steps = capacity_steps.saturating_add(1);
+                            progressed = search.step(
+                                Some(capacity),
+                                &mut bounds,
+                                runtime,
+                                epoch,
+                                scenarios,
+                                arena,
+                            )?;
+                        }
+                    } else if !search.point_closed {
+                        capacity_steps = 0;
+                        progressed =
+                            search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?;
+                    }
+                }
+                if !progressed {
+                    break;
                 }
             }
-            if !progressed {
-                break;
-            }
-        }
-        if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
-            for index in 0..search.jobs.len() {
-                if let Some(job) = search.jobs[index].take() {
-                    search.cancel_traversal(job).map_err(allocation)?;
+            if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
+                for index in 0..search.jobs.len() {
+                    if let Some(job) = search.jobs[index].take() {
+                        search.cancel_traversal(job).map_err(allocation)?;
+                    }
                 }
+                if search.evidence.open_regions != 0 {
+                    return Err(ProgramSessionEvaluationError::InternalInvariant);
+                }
+                search.evidence.completion = CompletionV1::Complete;
+            } else if let Some(proposals) = polish_proposals.as_deref().filter(|proposals| {
+                !proposals.is_empty() && search.evidence.visited < search.budget
+            }) {
+                // Do this after the last domain-search step. Resuming DFS could
+                // accept another earlier paint with a still-unsearched suffix and
+                // undo the improvement. The exact admitted-proposal count reserves
+                // only executable work; the pass consumes the remaining visits.
+                // Open regions still keep completeness explicitly unfinished.
+                search.polish(runtime, epoch, scenarios, arena, proposals)?;
             }
-            if search.evidence.open_regions != 0 {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
-            search.evidence.completion = CompletionV1::Complete;
-        } else if let Some(proposals) = polish_proposals
-            .as_deref()
-            .filter(|proposals| !proposals.is_empty() && search.evidence.visited < search.budget)
-        {
-            // Do this after the last domain-search step. Resuming DFS could
-            // accept another earlier paint with a still-unsearched suffix and
-            // undo the improvement. The exact admitted-proposal count reserves
-            // only executable work; the pass consumes the remaining visits.
-            // Open regions still keep completeness explicitly unfinished.
-            search.polish(runtime, epoch, scenarios, arena, proposals)?;
         }
     }
+    search.evidence.numerical_order_unresolved = search.evidence.completion
+        != CompletionV1::AuthoredExact
+        && search.peers.as_ref().is_some_and(PeerProfiles::unresolved);
     let (values, reference_selections) = if let Some(best) = search.best {
-        let values = cloned(&search.pending[best].values).map_err(allocation)?;
+        let mut values = cloned(&search.pending[best].values).map_err(allocation)?;
         // Pending tuples need their typed keys and source paints, not a copy
         // of every physical case. Recompose only the selected report, without
         // running another search or another constraint evaluator. The caller
@@ -1842,10 +2165,29 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             &mut search.legacy_scores,
             &mut search.appearance,
         )?;
-        (
-            Some(values),
-            Some(search.reference_reports(best).map_err(allocation)?),
-        )
+        // Snapshot storage and history use the compiled component order.
+        // Project both the full tuple and the subset of reference reports from
+        // the same mapping, before filtering out non-reference targets.
+        let local_order = if let Some(order) = order.as_ref() {
+            let mut local_order = buffer(count, 0).map_err(allocation)?;
+            for (local, ordinal) in order.targets.iter().enumerate() {
+                let dst = component
+                    .targets
+                    .binary_search(ordinal)
+                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+                local_order[dst] = local;
+                values[dst] = search.pending[best].values[local];
+            }
+            Some(local_order)
+        } else {
+            None
+        };
+        let target_order =
+            (0..count).map(|target| local_order.as_ref().map_or(target, |order| order[target]));
+        let reports = search
+            .reference_reports(best, target_order)
+            .map_err(allocation)?;
+        (Some(values), Some(reports))
     } else {
         (None, None)
     };

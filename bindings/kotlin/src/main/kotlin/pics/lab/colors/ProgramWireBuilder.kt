@@ -328,7 +328,7 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
     internal fun composeV3(targets: List<UInt>, options: ProgramWireComposeOptionsV3) {
         selectionV3(targets, options.reference, 5, "compose")
     }
-    private fun selectionV3(targets: List<UInt>, reference: List<ProgramWireReferenceInputV3>?, tag: Int, operation: String) {
+    internal fun selectionV3(targets: List<UInt>, reference: List<ProgramWireReferenceInputV3>?, tag: Int, operation: String) {
         if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("$operation is already declared")
         v3Entry(3) { out ->
             val size = targets.size
@@ -411,6 +411,12 @@ class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
      * declaration order only preserves compatibility for implicit-reference components. */
     fun compose(targets: List<UInt>, options: ProgramWireComposeOptionsV3 = ProgramWireComposeOptionsV3()): ProgramWireBuilderV3 {
         composeV3(targets, options)
+        return this
+    }
+
+    /** Balances reference uses on physically independent backdrops. */
+    fun composeReference(targets: List<UInt>, reference: List<ProgramWireReferenceInputV3>): ProgramWireBuilderV3 {
+        selectionV3(targets, reference, 6, "composeReference")
         return this
     }
 }

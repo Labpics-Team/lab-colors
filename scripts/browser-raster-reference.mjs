@@ -8,7 +8,7 @@ export async function verifyRasterRestoration(api) {
   canvas.width = 64;
   canvas.height = 40;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  let surround = 230;
+  let surround = 230, drawnWidth = 64;
   const draw = (frame) => {
     context.fillStyle = `rgb(${surround} ${surround} ${surround})`;
     context.fillRect(0, 0, 64, 40);
@@ -24,7 +24,7 @@ export async function verifyRasterRestoration(api) {
     context.fillRect(5, 6, 48, 23);
     context.fillStyle = frame.values.film.css;
     context.fillRect(5, 6, 48, 23);
-    return context.getImageData(0, 0, 64, 40);
+    return context.getImageData(0, 0, drawnWidth, 40);
   };
   const count = (a, b) => {
     let pixels = 0;
@@ -34,24 +34,35 @@ export async function verifyRasterRestoration(api) {
     return pixels;
   };
   let reference, limited, protectedReference, layered, layeredReference;
+  const sameView = { sameViewingContext: true };
   try {
     reference = program.captureRaster(draw);
-    const original = reference.resolve({ base: "#a0a0a0" });
+    const unconfirmed = reference.resolve({ base: "#a0a0a0" });
+    const original = reference.resolve({ base: "#a0a0a0" }, sameView);
     const ordinary = program.resolve({ base: "#8c8c8c" });
     const originalBytes = original.image.data;
     const ordinaryChanges = count(originalBytes, draw(ordinary).data);
-    const restored = reference.resolve({ base: "#8c8c8c" });
+    const restored = reference.resolve({ base: "#8c8c8c" }, sameView);
     const error = count(originalBytes, restored.image.data);
     surround--;
-    const different = reference.resolve({ base: "#8c8c8c" });
+    const different = reference.resolve({ base: "#8c8c8c" }, sameView);
     const reverted = different.frame.values.film.rgb.join() === ordinary.values.film.rgb.join();
-    const unknown = reference.resolve({ base: null });
+    const unknown = reference.resolve({ base: null }, sameView);
     surround++;
     const repeated = reference.resolve({ base: "#8c8c8c" });
     const order = [original.frame, restored.frame, different.frame, unknown.proposed, repeated.frame]
       .map((frame) => frame.revision);
     if (!order.every((revision, i) => i === 0 || revision === order[i - 1] + 1n)
       || repeated.relation !== "restored") throw new Error("raster resolution lost its current revision");
+    drawnWidth = 63;
+    const cropped = reference.resolve({ base: "#a0a0a0" }, sameView);
+    drawnWidth = 64;
+    if (unconfirmed.relation !== "preserved" || unconfirmed.fieldRelation !== "unavailable"
+      || original.fieldRelation !== "not-dirtier" || restored.fieldRelation !== "not-dirtier"
+      || different.fieldRelation !== "incomparable" || unknown.fieldRelation !== "unavailable"
+      || cropped.reason !== "incomparable-bitmap" || cropped.fieldRelation !== "unavailable") {
+      throw new Error("the field relation must describe the delivered readback and viewing context");
+    }
 
     const rounded = reference.resolve({ base: "#9f9f9f" });
     if (rounded.relation !== "restored" || rounded.frame.values.film.rgb[0] !== 81

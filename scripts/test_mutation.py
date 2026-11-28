@@ -2308,29 +2308,20 @@ class MutationTruthTest(unittest.TestCase):
             "wasm"
         ]
         self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
-        self.assertIn("      BINARYEN_RELEASE: version_133\n", wasm)
+        # The builder owns the compiler and optimizer recipe. Its runtime
+        # receipts and measurement tests validate the tools and output bytes.
+        budget = json.loads((repo / "packages/colors/bench/wasm.json").read_bytes())
+        commands = budget["recipe"]["commands"]
         self.assertIn(
-            '      BINARYEN_NODE_SHA256: "'
-            '3507aedecef25c46f2889530a7da304677e97122869274125f782b586cb508ab"\n',
+            "          build_runtime() {\n"
+            + "".join(f"            {command}\n" for command in commands)
+            + "          }\n",
             wasm,
         )
-        self.assertIn("binaryen-${BINARYEN_RELEASE}-node.tar.gz", wasm)
-        self.assertIn('printf \'%s  %s\\n\' "$BINARYEN_NODE_SHA256"', wasm)
-        self.assertIn("sha256sum --check -", wasm)
-        self.assertIn("wasm-pack build --no-opt --release", wasm)
-        self.assertEqual(wasm.count("wasm-pack build "), 1)
-        self.assertIn(
-            'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
-            "              --flatten --rereloop -Oz --converge --enable-bulk-memory "
-            "--enable-nontrapping-float-to-int",
-            wasm,
-        )
-        self.assertEqual(
-            wasm.count(
-                "--flatten --rereloop -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int"
-            ),
-            1,
-        )
+        for duplicate in ("BINARYEN_RELEASE:", "BINARYEN_NODE_SHA256:",
+                          "wasm-pack build ", "wasm-opt.js"):
+            self.assertNotIn(duplicate, wasm)
+        self.assertIn("node scripts/record-wasm-measurement.mjs ", wasm)
         self.assertIn("          npm test\n", wasm)
         self.assertIn("node scripts/test-program-runtime-browser.mjs", wasm)
         self.assertNotIn(
@@ -2343,10 +2334,6 @@ class MutationTruthTest(unittest.TestCase):
         )
         self.assertLess(
             wasm.index("uses: actions/setup-node@"),
-            wasm.index("name: install byte-bound Binaryen Node transport"),
-        )
-        self.assertLess(
-            wasm.index("name: install byte-bound Binaryen Node transport"),
             wasm.index("name: repeat runtime WASM build"),
         )
 

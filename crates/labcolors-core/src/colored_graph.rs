@@ -26,6 +26,7 @@ struct ArcV1 {
     neighbour: usize,
 }
 
+#[derive(Debug)]
 pub(crate) struct ColoredGraph<Color> {
     colors: Vec<Color>,
     adjacency_offsets: Vec<usize>,
@@ -135,7 +136,13 @@ impl<Color> ColoredGraph<Color> {
         self.colors.len()
     }
 
-    #[cfg(test)]
+    pub(crate) fn outgoing(&self, vertex: usize) -> impl Iterator<Item = (u8, usize)> + '_ {
+        self.arcs[self.adjacency_offsets[vertex]..self.adjacency_offsets[vertex + 1]]
+            .iter()
+            .filter(|arc| arc.direction == 0)
+            .map(|arc| (arc.role, arc.neighbour))
+    }
+
     pub(crate) fn colors(&self) -> &[Color] {
         &self.colors
     }

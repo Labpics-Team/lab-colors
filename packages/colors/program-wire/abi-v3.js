@@ -175,6 +175,11 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     return selection(this, targets, options, 5, "compose");
   }
 
+  composeReference(targets, reference) {
+    if (reference === undefined) invalid("composeReference requires a reference environment");
+    return selection(this, targets, { reference }, 6, "composeReference");
+  }
+
   finish() {
     const bytes = super.finish();
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint16(4, 3, true);

@@ -8,7 +8,7 @@ use super::reference_completion::{
 use super::*;
 use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
 
-fn measured<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn measured<E: ProgramConstraintEvaluatorSetV1>(
     value: Result<(), reference_completion::ReferenceCompletionErrorV1<ProgramEvaluatorError<E>>>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     match value {
@@ -26,11 +26,8 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v9.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
-    let mut bytes = [0; DOMAIN.len() + 8];
-    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
-    *crate::sha256::digest(&bytes).as_bytes()
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v12.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum.reference-visible-minimum.measured-incumbent-recovery\0";
+    execution_identity_with_budget(DOMAIN, budget)
 }
 
 #[derive(Default)]
@@ -44,6 +41,8 @@ pub(super) struct BuffersV1 {
     source: Vec<CertifiedScalarV1>,
     best_primary: Vec<CertifiedScalarV1>,
     best_source: Vec<CertifiedScalarV1>,
+    refined_primary: Vec<CertifiedScalarV1>,
+    refined_source: Vec<CertifiedScalarV1>,
     left: Vec<CertifiedScalarV1>,
     right: Vec<CertifiedScalarV1>,
     sort: Vec<CertifiedScalarV1>,
@@ -56,7 +55,7 @@ fn copy<T: Copy>(destination: &mut Vec<T>, source: &[T]) -> Result<(), ()> {
     Ok(())
 }
 
-fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ordering> {
+pub(super) fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ordering> {
     for (&a, &b) in a.iter().zip(b) {
         if a.strictly_below(b) {
             return Some(Ordering::Less);
@@ -69,6 +68,82 @@ fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ord
         }
     }
     Some(Ordering::Equal)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IncumbentProfileV1 {
+    Unmeasured,
+    Measured(PointMeasurementPrecisionV1),
+}
+
+/// A feasible tuple remains available even if its objective cannot be
+/// measured. Once a certified profile is available, an unmeasured tuple
+/// cannot displace it. Comparability and feasibility are independent.
+#[derive(Default)]
+pub(super) struct FeasibleIncumbentV1 {
+    profile: Option<IncumbentProfileV1>,
+    unresolved_comparison: bool,
+}
+
+impl FeasibleIncumbentV1 {
+    pub(super) fn has_value(&self) -> bool {
+        self.profile.is_some()
+    }
+
+    pub(super) fn precision(&self) -> Option<PointMeasurementPrecisionV1> {
+        match self.profile {
+            Some(IncumbentProfileV1::Measured(precision)) => Some(precision),
+            _ => None,
+        }
+    }
+
+    pub(super) fn refined(&mut self) {
+        debug_assert!(self.precision().is_some());
+        self.profile = Some(IncumbentProfileV1::Measured(
+            PointMeasurementPrecisionV1::Refined,
+        ));
+    }
+
+    pub(super) fn unresolved(&self) -> bool {
+        self.unresolved_comparison || self.profile == Some(IncumbentProfileV1::Unmeasured)
+    }
+
+    pub(super) fn consider(
+        &mut self,
+        measured: bool,
+        precision: PointMeasurementPrecisionV1,
+        order: Option<Ordering>,
+        tuple_order: Ordering,
+    ) -> bool {
+        // A distinct tuple with an unproved order must never count as a
+        // proved tie. Keep conservative evidence even if it is later
+        // discarded: an improvement of the incumbent alone cannot certify
+        // its relationship to every previously incomparable tuple.
+        self.unresolved_comparison |= self.has_value()
+            && tuple_order != Ordering::Equal
+            && (!measured || self.precision().is_none() || order.is_none());
+        let next = if measured {
+            IncumbentProfileV1::Measured(precision)
+        } else {
+            IncumbentProfileV1::Unmeasured
+        };
+        let retain = match (self.profile, next) {
+            (None, _) => true,
+            (Some(IncumbentProfileV1::Unmeasured), IncumbentProfileV1::Measured(_)) => true,
+            (Some(IncumbentProfileV1::Unmeasured), IncumbentProfileV1::Unmeasured) => {
+                tuple_order == Ordering::Less
+            }
+            (Some(IncumbentProfileV1::Measured(_)), IncumbentProfileV1::Unmeasured) => false,
+            (Some(IncumbentProfileV1::Measured(_)), IncumbentProfileV1::Measured(_)) => {
+                order == Some(Ordering::Less)
+                    || order == Some(Ordering::Equal) && tuple_order == Ordering::Less
+            }
+        };
+        if retain {
+            self.profile = Some(next);
+        }
+        retain
+    }
 }
 
 fn initial_precision() -> PointMeasurementPrecisionV1 {
@@ -89,43 +164,50 @@ fn sorted_order(buffers: &mut BuffersV1) -> Option<Ordering> {
 
 fn compare_primary<E: ProgramConstraintEvaluatorSetV1>(
     prepared: &PreparedPointSelectionV1<'_, '_, E>,
+    context: &ContextV1<'_>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
 ) -> Option<Ordering> {
-    buffers.left.clear();
-    buffers.right.clear();
-    // A shared immutable expression can be cancelled from both multisets.
-    // Matching non-singleton bounds, in contrast, never authorize cancellation.
-    for variable in 0..component.point_variable_count() {
-        let local = component.point_variable(variable);
-        if prepared.same_point_expression(component, local, &buffers.values, &buffers.best, region)
-        {
-            continue;
+    // The same tiers as reference composition, with no transport losses.
+    // Each use contributes its worst loss across all of its observed contexts.
+    for explicit_tone in [true, false] {
+        buffers.left.clear();
+        buffers.right.clear();
+        // A shared immutable expression can be cancelled from both multisets.
+        // Matching non-singleton bounds never authorize cancellation.
+        for variable in 0..component.point_variable_count() {
+            let local = component.point_variable(variable);
+            if context.targets[local].tone_input.is_some() != explicit_tone
+                || prepared.same_point_expression(
+                    component,
+                    local,
+                    &buffers.values,
+                    &buffers.best,
+                    region,
+                )
+            {
+                continue;
+            }
+            buffers.left.push(buffers.primary[variable]);
+            buffers.right.push(buffers.best_primary[variable]);
         }
-        for (a, b) in buffers
-            .primary
-            .chunks_exact(component.point_variable_count())
-            .zip(
-                buffers
-                    .best_primary
-                    .chunks_exact(component.point_variable_count()),
-            )
-        {
-            buffers.left.push(a[variable]);
-            buffers.right.push(b[variable]);
+        match sorted_order(buffers)? {
+            Ordering::Equal => {}
+            order => return Some(order),
         }
     }
-    sorted_order(buffers)
+    Some(Ordering::Equal)
 }
 
 fn compare<E: ProgramConstraintEvaluatorSetV1>(
     prepared: &PreparedPointSelectionV1<'_, '_, E>,
+    context: &ContextV1<'_>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
 ) -> Option<Ordering> {
-    match compare_primary(prepared, component, buffers, region)? {
+    match compare_primary(prepared, context, component, buffers, region)? {
         Ordering::Equal => {}
         order => return Some(order),
     }
@@ -151,11 +233,8 @@ struct SearchV1<'a, 'context, 'program, 'scratch, E: ProgramConstraintEvaluatorS
     buffers: &'a mut BuffersV1,
     evidence: SearchEvidenceV1,
     budget: u64,
-    has_best: bool,
-    best_measured: bool,
+    incumbent: FeasibleIncumbentV1,
     initial_precision: PointMeasurementPrecisionV1,
-    best_precision: PointMeasurementPrecisionV1,
-    unresolved: bool,
 }
 
 impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
@@ -180,22 +259,47 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
     fn refine_incumbent(
         &mut self,
     ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        if self.best_precision == PointMeasurementPrecisionV1::Refined {
+        if self.incumbent.precision() != Some(PointMeasurementPrecisionV1::Screened) {
             return Ok(());
         }
         #[cfg(test)]
         tests::refined_incumbent();
-        self.best_measured = measured::<E>(self.prepared.measure_point_component(
+        let refined = measured::<E>(self.prepared.measure_point_component(
             self.component,
             &self.buffers.best,
             None,
             &self.context.local_cases.order,
-            &mut self.buffers.best_primary,
-            &mut self.buffers.best_source,
+            &mut self.buffers.refined_primary,
+            &mut self.buffers.refined_source,
             PointMeasurementV1::Profile(PointMeasurementPrecisionV1::Refined),
         ))?;
-        self.best_precision = PointMeasurementPrecisionV1::Refined;
+        if refined {
+            std::mem::swap(
+                &mut self.buffers.best_primary,
+                &mut self.buffers.refined_primary,
+            );
+            std::mem::swap(
+                &mut self.buffers.best_source,
+                &mut self.buffers.refined_source,
+            );
+            self.incumbent.refined();
+        }
         Ok(())
+    }
+
+    fn refine_current(
+        &mut self,
+        region: Option<RegionNodeV1>,
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        // The screened enclosure is still valid when refinement fails.
+        std::mem::swap(&mut self.buffers.primary, &mut self.buffers.refined_primary);
+        std::mem::swap(&mut self.buffers.source, &mut self.buffers.refined_source);
+        let refined = self.measure_current(region, PointMeasurementPrecisionV1::Refined)?;
+        if !refined {
+            std::mem::swap(&mut self.buffers.primary, &mut self.buffers.refined_primary);
+            std::mem::swap(&mut self.buffers.source, &mut self.buffers.refined_source);
+        }
+        Ok(refined)
     }
 
     fn assess_profile(
@@ -211,34 +315,40 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
             precision = PointMeasurementPrecisionV1::Refined;
             current_measured = self.measure_current(region, precision)?;
         }
-        if !self.has_best || !self.best_measured || !current_measured {
+        if self.incumbent.precision().is_none() || !current_measured {
             return Ok((current_measured, precision, None));
         }
-        let mut order = compare(self.prepared, self.component, self.buffers, region);
+        let mut order = compare(
+            self.prepared,
+            self.context,
+            self.component,
+            self.buffers,
+            region,
+        );
         if order.is_none()
             && (precision == PointMeasurementPrecisionV1::Screened
-                || self.best_precision == PointMeasurementPrecisionV1::Screened)
+                || self.incumbent.precision() == Some(PointMeasurementPrecisionV1::Screened))
         {
             // Refine both operands before an ambiguous tuple decision or a
             // budget-affecting region branch. A wider screening interval may
             // neither retain a worse tuple nor consume extra search nodes.
             self.refine_incumbent()?;
-            if precision == PointMeasurementPrecisionV1::Screened {
+            if precision == PointMeasurementPrecisionV1::Screened && self.refine_current(region)? {
                 precision = PointMeasurementPrecisionV1::Refined;
-                current_measured = self.measure_current(region, precision)?;
             }
-            if self.best_measured && current_measured {
-                order = compare(self.prepared, self.component, self.buffers, region);
-            }
+            order = compare(
+                self.prepared,
+                self.context,
+                self.component,
+                self.buffers,
+                region,
+            );
         }
         Ok((current_measured, precision, order))
     }
 
     fn synchronize(&mut self) {
-        for local in 0..self.component.targets.len() {
-            self.buffers.values[local] =
-                self.buffers.values[self.component.point_representative(local)];
-        }
+        self.context.expand_sources(&mut self.buffers.values);
     }
 
     fn assess(
@@ -269,12 +379,14 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
             return Ok(Some((failures, false)));
         }
         let (measured, precision, order) = self.assess_profile(None)?;
-        self.unresolved |= !measured || self.has_best && order.is_none();
         // At a proved P+S tie, canonical tuple order picks a representative;
         // it is not reported as a scientific improvement.
-        let retain = !self.has_best
-            || order == Some(Ordering::Less)
-            || order == Some(Ordering::Equal) && self.buffers.values < self.buffers.best;
+        let retain = self.incumbent.consider(
+            measured,
+            precision,
+            order,
+            self.buffers.values.cmp(&self.buffers.best),
+        );
         if retain {
             copy(&mut self.buffers.best, &self.buffers.values)
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
@@ -282,9 +394,6 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
             copy(&mut self.buffers.best_source, &self.buffers.source)
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-            self.has_best = true;
-            self.best_measured = measured;
-            self.best_precision = precision;
         }
         Ok(Some((0, retain)))
     }
@@ -460,7 +569,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         &mut self,
         node: RegionNodeV1,
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        if !self.has_best || !self.best_measured {
+        if self.incumbent.precision().is_none() {
             return Ok(false);
         }
         if self.initial_precision == PointMeasurementPrecisionV1::Screened {
@@ -479,11 +588,16 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                 &mut self.buffers.source,
                 PointMeasurementV1::RegionWitness,
             ))?;
-            // Each row has an independent witness for its interval lower bound.
+            // Each use has independent witnesses for its interval lower bound.
             // Such a profile can disprove pruning but cannot retain a tuple.
             if witnessed
-                && compare_primary(self.prepared, self.component, self.buffers, Some(node))
-                    == Some(Ordering::Less)
+                && compare_primary(
+                    self.prepared,
+                    self.context,
+                    self.component,
+                    self.buffers,
+                    Some(node),
+                ) == Some(Ordering::Less)
             {
                 return Ok(false);
             }
@@ -496,20 +610,18 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
 #[allow(clippy::too_many_arguments)]
 pub(in crate::program_session) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut buffers = prepared.take_point_buffers();
     let result = search(
         selection,
-        component,
+        observation,
         runtime,
         epoch,
-        scenarios,
         arena,
         prepared,
         &mut buffers,
@@ -521,15 +633,16 @@ pub(in crate::program_session) fn select_component<E: ProgramConstraintEvaluator
 #[allow(clippy::too_many_arguments)]
 fn search<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
     buffers: &mut BuffersV1,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let context = ContextV1::point::<E>(selection, component, scenarios)?;
+    let component = observation.component;
+    let scenarios = observation.scenarios;
+    let context = ContextV1::for_observation::<E>(selection, observation, None)?;
     prepared
         .refresh_point_component(component, &context.local_cases.order)
         .map_err(|error| match error {
@@ -556,13 +669,10 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
     copy(&mut buffers.working, &buffers.authored)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     buffers.scores.resize(count, 0.0);
-    let rows = variables
-        .checked_mul(context.local_cases.order.len())
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
     for values in [&mut buffers.left, &mut buffers.right, &mut buffers.sort] {
         values.clear();
         values
-            .try_reserve(rows.max(count))
+            .try_reserve(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
     let mut state = SearchV1 {
@@ -572,6 +682,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         buffers,
         evidence: SearchEvidenceV1 {
             completion: CompletionV1::BudgetExhausted,
+            numerical_order_unresolved: false,
             visited: 0,
             regions: 0,
             points: 0,
@@ -580,17 +691,14 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             open_regions: 0,
         },
         budget: selection.budget,
-        has_best: false,
-        best_measured: false,
+        incumbent: FeasibleIncumbentV1::default(),
         initial_precision: initial_precision(),
-        best_precision: initial_precision(),
-        unresolved: false,
     };
     let authored = state.assess(runtime, epoch, scenarios, arena)?;
     let authored_optimal = authored.is_some_and(|(failures, _)| failures == 0)
         && match state
             .prepared
-            .authored_point_optimal(component, &context.local_cases.order)
+            .authored_continuous_terms_minimal(component, &context.local_cases.order)
         {
             Ok(proven) => proven,
             Err(error) => {
@@ -604,7 +712,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         state.evidence.completion = CompletionV1::AuthoredExact;
     } else {
         let seed_limit = (selection.budget / COORDINATE_BUDGET_DIVISOR).max(state.evidence.visited);
-        if !state.has_best && variables >= 2 {
+        if !state.incumbent.has_value() && variables >= 2 {
             let proposals = component
                 .point_constraints()
                 .iter()
@@ -734,15 +842,15 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             }
         }
         let mut segment_polish = false;
-        if !state.has_best {
+        if !state.incumbent.has_value() {
             state.discover_material_sources(seed_limit, runtime, epoch, scenarios, arena)?;
             // A late change to a fill can make an earlier text adjustment unnecessary.
-            segment_polish = state.has_best;
+            segment_polish = state.incumbent.has_value();
         }
         let materials = (0..variables)
             .filter(|&variable| !context.opaque[component.point_variable(variable)])
             .count() as u64;
-        let polish_work = if state.has_best {
+        let polish_work = if state.incumbent.has_value() {
             let segments = if segment_polish { variables as u64 } else { 0 };
             (segments + 2 * materials) * u64::from(u8::MAX)
         } else {
@@ -753,7 +861,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         let constraints = region_constraints(epoch, context.constraint_indices)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         let mut bounds = BoundsV1 {
-            constraint_lower: buffer(constraints.len(), RegionPointV1::default())
+            constraint_lower: buffer(constraints.len(), None)
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?,
             constraints,
             lower: buffer(count, [0; 3])
@@ -889,7 +997,8 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             }
         }
     }
-    let values = if state.has_best {
+    state.evidence.numerical_order_unresolved = !authored_optimal && state.incumbent.unresolved();
+    let values = if state.incumbent.has_value() {
         let mut values = Vec::new();
         copy(&mut values, &state.buffers.best)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;

@@ -39,7 +39,7 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   void table;
   const component = snapshot.selectionComponents()?.[0];
   if (component) {
-    const mode: "ordered-v1" | "joint-point-v1" | "ordered-reference-v1" = component.mode;
+    const mode: "ordered-v1" | "joint-point-v1" | "ordered-reference-v1" | "joint-reference-peers-v1" = component.mode;
     const targets: ReadonlyArray<number> = component.targets;
     void mode;
     void targets;

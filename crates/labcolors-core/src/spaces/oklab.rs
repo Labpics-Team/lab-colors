@@ -68,7 +68,59 @@ pub(crate) fn srgb_linear_to_lms_root(rgb: [f64; 3]) -> [f64; 3] {
     [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()]
 }
 
-fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
+// Every encoded channel is in [0, 1], and the smallest positive product
+// is at least 2^-17. Thus each LMS sum is zero or a positive normal f64.
+// Positive matrix entries and monotone binary64 operations preserve order.
+const _: () = {
+    let mut row = 0;
+    while row < 3 {
+        let mut column = 0;
+        while column < 3 {
+            let coefficient = SRGB_TO_LMS[row][column];
+            assert!(coefficient >= 1.0 / 32.0 && coefficient <= 1.0);
+            column += 1;
+        }
+        row += 1;
+    }
+};
+
+mod rounded_root;
+
+/// Identity of the operational encoded-color projection shared by all
+/// assignment execution profiles. Authored content keeps its own identity.
+pub(crate) const SRGB8_OKLAB_PROJECTION_IDENTITY: &[u8] =
+    b"labcolors.srgb8-oklab-projection.v1.exact-rounded-lms-roots\0";
+
+fn srgb8_lms_root_uncached(rgb: crate::Srgb8) -> [f64; 3] {
+    // The independently replayable nominal proof binds the exact sRGB
+    // implementation. Admit its actual decoder once before any cache entry
+    // can be produced; the matrix coefficients are checked at compile time.
+    static DECODE: std::sync::Once = std::sync::Once::new();
+    DECODE.call_once(|| {
+        use crate::spaces::srgb::decode_8bit;
+        assert!(decode_8bit(0) == 0.0 && decode_8bit(1) >= 1.0 / 4096.0);
+        for i in 1..=255_u8 {
+            let decoded = decode_8bit(i);
+            assert!(decoded > decode_8bit(i - 1) && decoded <= 1.0);
+        }
+    });
+    let lms = mat_vec_mul(
+        SRGB_TO_LMS,
+        crate::spaces::srgb::srgb_linear_from_srgb8(rgb),
+    );
+    lms.map(|value| {
+        if value == 0.0 {
+            0.0
+        } else {
+            f64::from_bits(rounded_root::rounded_cbrt_bits(
+                value.to_bits(),
+                value.cbrt().to_bits(),
+            ))
+        }
+    })
+}
+
+pub(crate) fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
     use core::cell::Cell;
 
     // Point colors and interval corners share the exact same three roots.
@@ -92,7 +144,7 @@ fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
                 return roots;
             }
         }
-        let roots = srgb_linear_to_lms_root(crate::spaces::srgb::srgb_linear_from_srgb8(rgb));
+        let roots = srgb8_lms_root_uncached(rgb);
         slot.set(Some((rgb, roots)));
         roots
     })
@@ -102,8 +154,18 @@ pub(crate) fn srgb8_to_oklab(rgb: crate::Srgb8) -> [f64; 3] {
     mat_vec_mul(LMS_TO_OKLAB, srgb8_lms_root(rgb))
 }
 
-/// Границы машинного Oklab для RGB8-box. Предпосылка профиля — конечность и
-/// монотонность фактического decode → LMS → cbrt на всех соседних RGB8-рёбрах.
+/// Exact finite gray-axis projection, shared by point and region admission.
+/// No claim about monotonicity of the second (signed) Oklab matrix is needed.
+pub(crate) fn srgb8_neutral_lightness() -> &'static [f64; 256] {
+    static LIGHTNESS: std::sync::OnceLock<[f64; 256]> = std::sync::OnceLock::new();
+    LIGHTNESS.get_or_init(|| {
+        std::array::from_fn(|gray| srgb8_to_oklab(crate::Srgb8::new([gray as u8; 3]))[0])
+    })
+}
+
+/// Границы машинного Oklab для RGB8-box. Таблица decode допускается один раз,
+/// положительные коэффициенты LMS проверяются при компиляции, корень корректно округлён,
+/// поэтому все три координаты LMS монотонны на всей RGB8-решётке.
 /// Знаки коэффициентов и порядок операций совпадают с point-проекцией.
 pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3], [f64; 3]) {
     use crate::Srgb8;
@@ -235,11 +297,11 @@ mod tests {
     use crate::spaces::srgb::srgb_from_hex;
 
     #[test]
-    fn repeatedly_projected_and_evicted_bytes_match_the_direct_float_path_to_the_bit() {
+    fn repeatedly_projected_and_evicted_bytes_match_uncached_projection_to_the_bit() {
         for index in (0..4096_u32).chain((0..4096_u32).rev()) {
             let bytes = index.wrapping_mul(0x7f4a_7c15).to_be_bytes();
             let rgb = crate::Srgb8::new([bytes[1], bytes[2], bytes[3]]);
-            let expected = srgb_linear_to_oklab(crate::spaces::srgb::srgb_linear_from_srgb8(rgb));
+            let expected = mat_vec_mul(LMS_TO_OKLAB, srgb8_lms_root_uncached(rgb));
             for _ in 0..2 {
                 assert_eq!(
                     srgb8_to_oklab(rgb).map(f64::to_bits),
@@ -263,9 +325,7 @@ mod tests {
                         [first, varying, second],
                         [varying, first, second],
                     ] {
-                        let point = srgb_linear_to_oklab(
-                            crate::spaces::srgb::srgb_linear_from_srgb8(crate::Srgb8::new(rgb)),
-                        );
+                        let point = srgb8_to_oklab(crate::Srgb8::new(rgb));
                         assert!(
                             (0..3).all(
                                 |axis| lower[axis] <= point[axis] && point[axis] <= upper[axis]

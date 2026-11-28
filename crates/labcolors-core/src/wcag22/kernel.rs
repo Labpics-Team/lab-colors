@@ -54,6 +54,15 @@ fn threshold(criterion: Wcag22CriterionV1) -> ThresholdV1 {
     }
 }
 
+// Exact threshold projection for conservative search bounds. Applicability
+// and terminal decisions still use classify_pair.
+pub(super) fn twice_minimum_contrast(criterion: Wcag22CriterionV1) -> u8 {
+    match threshold(criterion) {
+        ThresholdV1::Three => 6,
+        ThresholdV1::FourAndHalf => 9,
+    }
+}
+
 pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 {
     let packed = PACKED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])]
         + PACKED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])]

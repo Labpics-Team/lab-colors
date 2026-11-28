@@ -589,6 +589,51 @@ fn contrast_passes(foreground: u8, background: u8, criterion: Wcag22CriterionV1)
     )
 }
 
+#[test]
+fn nested_translucent_text_proves_impossible_at_the_root() {
+    for reverse in [false, true] {
+        for alpha in [0.0, 0.1] {
+            let mut declaration = nested(reverse);
+            let parent = declaration
+                .targets
+                .iter_mut()
+                .find(|target| target.id == TargetId::new(10))
+                .expect("nested fixture has a parent target");
+            *parent = target(10, 150, 0, 255, 0);
+            declaration
+                .opacities
+                .push(OpacityInput::new(OpacityInputId::new(50), alpha));
+            declaration.paints.push(Paint::Opacity {
+                id: PaintId::new(51),
+                source: PaintId::new(13),
+                opacity: OpacityInputId::new(50),
+            });
+            declaration.occurrences[1].subject = PaintId::new(51);
+            declaration.outputs[1] = OutputBinding::new(OutputSlotId::new(17), PaintId::new(51));
+            let owner = compile_assignment(declaration, 2)
+                .expect("nested fixture compiles with two region visits");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("nested fixture instantiates");
+            session
+                .prepare_update(update(1, 255))
+                .expect("fixture observation is valid")
+                .commit();
+            let SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(cause),
+                ..
+            } = session.state()
+            else {
+                panic!("the physical root is impossible at alpha={alpha}");
+            };
+            assert_eq!(cause.search.completion, CompletionV1::Complete);
+            assert_eq!(cause.search.visited, 2);
+            assert_eq!(cause.search.endpoint_evaluations, 2);
+            assert_eq!(cause.search.open_regions, 0);
+        }
+    }
+}
+
 // Независимый полный перебор серой области: oracle не пользуется search,
 // pruning, подготовленными scores, Paint slots или порядком кандидатов Core.
 fn oracle_lab_gray(value: u8) -> [f64; 3] {

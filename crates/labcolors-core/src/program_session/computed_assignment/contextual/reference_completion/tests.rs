@@ -6,6 +6,7 @@ use crate::program_session::computed_assignment::tests::{
 };
 use crate::session::SessionState;
 use crate::session_tests::CommitSessionUpdateForTest as _;
+use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_srgb8};
 
 mod declared_fields;
 
@@ -1728,7 +1729,7 @@ fn authored_material_minimum(
         .refresh_point_component(&selection.components[0], &cases)
         .map_err(fixture_error)?;
     prepared
-        .authored_point_optimal(&selection.components[0], &cases)
+        .authored_continuous_terms_minimal(&selection.components[0], &cases)
         .map_err(fixture_error)
 }
 

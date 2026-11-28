@@ -220,11 +220,16 @@ private fun verifyRasterReference() {
     check(paintProposal(rgb(120, 120, 120), rgb(159, 159, 159), 0.5) == 0x515151u)
     check(paintProposal(rgb(0, 0, 0), rgb(255, 255, 255), 0.5) == null)
     val choice = requireNotNull(captureRasterReference(2u, 1u, original)).use { reference ->
-        reference.start(2u, 1u, original, true).use { check(it.action() == "preserved") }
+        reference.start(2u, 1u, original, true).use {
+            check(it.action() == "preserved")
+            check(it.fieldRelation(false) == "unavailable")
+            check(it.fieldRelation(true) == "not-dirtier")
+        }
         reference.start(2u, 1u, changed, true).use {
             it.proposalLimit()
             it.refused(false)
             check(it.action() == "proposal-limit")
+            check(it.fieldRelation(true) == "incomparable")
         }
         reference.start(2u, 1u, changed, true)
     }
@@ -235,6 +240,7 @@ private fun verifyRasterReference() {
         check(it.action() == "try-visible")
         it.inspect(2u, 1u, original)
         check(it.action() == "restored")
+        check(it.fieldRelation(true) == "not-dirtier")
     }
 }
 
@@ -275,6 +281,10 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     val composeTargets = listOf(0x01020304u, 0xffffffffu, 0u)
     val composeReference = listOf(ProgramWireReferenceInputV3(0x10203040u, rgb(1, 128, 255)),
         ProgramWireReferenceInputV3(0xffffffffu, rgb(254, 129, 0)))
+    val peers = ProgramWireBuilderV3().composeReference(composeTargets, composeReference).finish()
+    check(peers[26].toInt() == 7)
+    peers[26] = 6
+    bytesEqual(requireNotNull(fixtures["composeReference"]).wireBytes(), peers)
     for ((name, members, inputs) in listOf(
         Triple("compose", composeTargets, null), Triple("composeReference", composeTargets, composeReference),
         Triple("composeEmpty", emptyList(), null), Triple("composeReferenceEmpty", emptyList(), emptyList()),

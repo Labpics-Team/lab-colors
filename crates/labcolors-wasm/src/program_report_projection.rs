@@ -135,6 +135,7 @@ fn selection_components(report: &ProgramAssessmentReportV1) -> Result<js_sys::Ar
             ProgramSelectionModeV1::OrderedV1 => "ordered-v1",
             ProgramSelectionModeV1::JointPointV1 => "joint-point-v1",
             ProgramSelectionModeV1::OrderedReferenceV1 => "ordered-reference-v1",
+            ProgramSelectionModeV1::JointReferencePeersV1 => "joint-reference-peers-v1",
         };
         let record = super::report_selection_component(mode, component.targets())?;
         report_array_push(&components, &record)?;

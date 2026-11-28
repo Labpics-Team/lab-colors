@@ -22,10 +22,10 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "6ffdf270ea964b01112eafdd3d8e62cb277d8415e5c2e2ae3fdc10cd01705ed5";
+    "33f3702074332f33f3d669a62bb78d30d86f0a0262dced60bc1dbfa697bf9761";
 const PROOF_PAYLOAD_SHA256: &str =
-    "726d4a6038d8d30a76c7051de881b199c9d762dedb7ac609b1ba84b7252b7977";
-const VERIFIER_SHA256: &str = "0944e4bc120ab3db99ca70d1ae99b4b745c7b9992413acff648927e273f4e737";
+    "b0ad8061716be86d9fd1e12b580c5d4cf7918312319091b4b7bbcf4ed52b4237";
+const VERIFIER_SHA256: &str = "2a5daa5f19784f70d12537b23a8fdf016f0de4eb30d97750f91403c35e8eb131";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +221,12 @@ pub(crate) fn measure_wcag22_srgb8(
         foreground_luminance: kernel::luminance_bounds(foreground),
         background_luminance: kernel::luminance_bounds(background),
     }
+}
+
+/// Exact minimum ratio in units of one half, projected from the normative
+/// kernel for conservative search. Never used to issue a WCAG decision.
+pub(crate) fn twice_minimum_contrast(criterion: Wcag22CriterionV1) -> u8 {
+    kernel::twice_minimum_contrast(criterion)
 }
 
 /// Total production decision for the admitted final-sRGB8 domain.

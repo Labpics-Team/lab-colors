@@ -77,7 +77,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "aef97fdcbb2ffe0fb24af78278da57cb1e74b450f1c95ca8a9ebf55793b8fca9"
+    "5032a7616d4a7030c8c3e147b604f6f232aaac4d11beddeac81adb95df8b1de1"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -89,7 +89,7 @@ EXPECTED_PARSER_SHA256 = (
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
-    "c2f252829577f1a5455b91afdccc1669ff0c964e10d8935db9e79b0c8ce251d6"
+    "d9ca3d27aba5bc8d61229d1b519a8fccc22def9519886e0b811b3c91f3eb0217"
 )
 DECLARED_OPERATION_LAW = (
     "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"
@@ -853,6 +853,7 @@ def verify_production_kernel() -> str:
     required = (
         "Wcag22CriterionV1::Sc143TextDefault => ThresholdV1::FourAndHalf",
         "Wcag22CriterionV1::Sc143TextLargeScale | Wcag22CriterionV1::Sc1411UiComponentOrState | Wcag22CriterionV1::Sc1411GraphicalObject => ThresholdV1::Three",
+        "pub(super) fn twice_minimum_contrast(criterion: Wcag22CriterionV1) -> u8 { match threshold(criterion) { ThresholdV1::Three => 6, ThresholdV1::FourAndHalf => 9, } }",
         "static PACKED_CONTRIBUTION_BOUNDS: [[u64; 256]; 3] = {",
         "let mut packed = [[0_u64; 256]; 3]; let mut channel = 0; while channel < 3 { let mut code = 0; while code < 256 {",
         "let [lower, upper] = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[channel][code];",
@@ -972,6 +973,8 @@ def verify_public_facade() -> str:
     compact = re.sub(r"\s+", " ", source)
     export = "pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};"
     assert compact.count(export) == 1, "public facade no longer re-exports the kernel exactly"
+    projection = "pub(crate) fn twice_minimum_contrast(criterion: Wcag22CriterionV1) -> u8 { kernel::twice_minimum_contrast(criterion) }"
+    assert compact.count(projection) == 1, "facade contrast threshold projection drifted"
     for forbidden in ("fn evaluate_wcag22_hex", "fn evaluate_wcag22_srgb8"):
         assert forbidden not in source, f"public facade shadows kernel with {forbidden}"
 

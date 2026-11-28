@@ -149,10 +149,34 @@ impl RasterAction {
     }
 }
 
+/// Whole-field Cleanliness relative to the captured image, under the identity comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RasterFieldRelation {
+    /// Every final pixel matches at its original position in the same viewing context.
+    NotDirtier,
+    /// Both complete, comparable fields were observed and differ; their order is unknown.
+    Incomparable,
+    /// No selected field, comparable observation, or common viewing context.
+    Unavailable,
+}
+
+impl RasterFieldRelation {
+    /// Stable spelling shared by renderer adapters.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotDirtier => "not-dirtier",
+            Self::Incomparable => "incomparable",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// Finite selection protocol for one ready ordinary frame and its reference.
 #[derive(Debug)]
 pub struct RasterSelection {
     action: RasterAction,
+    ordinary_differs: bool,
     inverse_trial: RasterTrial,
 }
 
@@ -168,6 +192,7 @@ impl RasterSelection {
         };
         Self {
             action,
+            ordinary_differs: ordinary == Some(false),
             inverse_trial: RasterTrial::NotReady,
         }
     }
@@ -176,6 +201,21 @@ impl RasterSelection {
     #[must_use]
     pub fn action(&self) -> RasterAction {
         self.action
+    }
+
+    /// Assesses only the selected field. The renderer supplies the viewing-context
+    /// premise independently of pixel dimensions and any limits encountered by trials.
+    #[must_use]
+    pub fn field_relation(&self, same_viewing_context: bool) -> RasterFieldRelation {
+        if !same_viewing_context {
+            return RasterFieldRelation::Unavailable;
+        }
+        match self.action {
+            RasterAction::TryInverse | RasterAction::TryVisible => RasterFieldRelation::Unavailable,
+            RasterAction::Preserved | RasterAction::Restored => RasterFieldRelation::NotDirtier,
+            _ if self.ordinary_differs => RasterFieldRelation::Incomparable,
+            _ => RasterFieldRelation::Unavailable,
+        }
     }
 
     /// Records one requested trial. A terminal decision cannot be changed.
@@ -347,6 +387,42 @@ mod tests {
             assert_eq!(selection.action(), action);
             selection.observe(SameField);
             assert_eq!(selection.action(), action);
+        }
+    }
+
+    #[test]
+    fn field_relation_belongs_to_the_returned_bitmap_in_the_declared_viewing_context() {
+        use RasterFieldRelation::{Incomparable, NotDirtier, Unavailable};
+
+        for (ordinary, paints, expected) in [
+            (Some(true), false, NotDirtier),
+            (Some(false), false, Incomparable),
+            (None, true, Unavailable),
+        ] {
+            let choice = RasterSelection::start(ordinary, paints);
+            assert_eq!(choice.field_relation(true), expected);
+            assert_eq!(choice.field_relation(false), Unavailable);
+        }
+        for trial in [
+            RasterTrial::DifferentField,
+            RasterTrial::Incomparable,
+            RasterTrial::SearchLimit,
+            RasterTrial::ProposalLimit,
+            RasterTrial::NotReady,
+            RasterTrial::SameField,
+        ] {
+            let mut choice = RasterSelection::start(Some(false), true);
+            assert_eq!(choice.field_relation(true), Unavailable);
+            choice.observe(RasterTrial::NotReady);
+            assert_eq!(choice.field_relation(true), Unavailable);
+            choice.observe(trial);
+            let expected = if trial == RasterTrial::SameField {
+                NotDirtier
+            } else {
+                Incomparable
+            };
+            assert_eq!(choice.field_relation(true), expected);
+            assert_eq!(choice.field_relation(false), Unavailable);
         }
     }
 }

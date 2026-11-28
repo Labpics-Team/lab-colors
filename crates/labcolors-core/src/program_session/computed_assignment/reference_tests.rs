@@ -95,15 +95,45 @@ fn hierarchy_then_unary_regions_allocate_the_complete_result_once() {
             OccurrenceId::new(5),
             Wcag22CriterionV1::Sc143TextDefault,
         ));
+    for (id, criterion) in [
+        (32, Wcag22CriterionV1::Sc143TextLargeScale),
+        (33, Wcag22CriterionV1::Sc143TextDefault),
+    ] {
+        p.constraints
+            .hard
+            .push(ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(id),
+                OccurrenceId::new(15),
+                criterion,
+            ));
+    }
     let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
         .expect("ordered hierarchy followed by a unary constraint should compile");
     let (result, allocations) = crate::test_support::measured_allocator_events(|| {
         region_constraints(&owner.owner_generation, None)
     });
     let regions = result.expect("finite region constraints should allocate");
-    assert_eq!(regions.len(), 8);
+    assert_eq!(regions.len(), 10);
     assert_eq!(allocations.alloc, 1);
     assert_eq!(allocations.realloc, 0);
+    let weaker_slot = owner
+        .owner_generation
+        .graph
+        .bind_occurrence(OccurrenceId::new(15))
+        .expect("compiled hierarchy occurrence");
+    for region in regions {
+        if let RegionConstraintV1::TonalHierarchy {
+            weaker,
+            weaker_contrast,
+            ..
+        } = region
+        {
+            assert_eq!(
+                weaker_contrast,
+                (weaker == weaker_slot).then_some(Wcag22CriterionV1::Sc143TextDefault)
+            );
+        }
+    }
 }
 
 #[test]
@@ -171,6 +201,814 @@ fn gray_reference_hierarchy_adapts_and_recovers_authored_composition() {
     }
 }
 
+fn compile_reference_composition(
+    mut p: Program<Wcag22Srgb8V1>,
+    reverse: bool,
+) -> CompiledProgram<Wcag22Srgb8V1> {
+    if reverse {
+        p.targets.reverse();
+        p.paints.reverse();
+        p.surfaces.reverse();
+        p.occurrences.reverse();
+        p.constraints.hard.reverse();
+    }
+    p.assignment = Some(ComputedSelectionPolicyV1::ReferenceComposition(
+        p.targets.iter().map(|target| target.id).collect(),
+    ));
+    p.computed_budget = Some(EXECUTION_NODE_LIMIT_V1);
+    p.compile().expect("reference composition compiles")
+}
+
+fn mixed_repeated_children(duplicate: bool, distinct_requirement: bool) -> Program<Wcag22Srgb8V1> {
+    let mut p = singleton(Srgb8::new([32; 3]), 255, 0.75);
+    p.surfaces.push(Surface::FromOccurrence {
+        id: SurfaceId::new(14),
+        occurrence: OccurrenceId::new(5),
+    });
+    for index in 0..if duplicate { 2 } else { 1 } {
+        let offset = index * 10;
+        let mut target = color(20 + offset, 15 + offset, 220, u64::from(index) + 1);
+        let TargetIntentV1::Computed(value) = &mut target.intent else {
+            unreachable!()
+        };
+        value.reference_appearance = false;
+        p.targets.push(target);
+        p.paints.push(Paint::Solid {
+            id: PaintId::new(13 + offset),
+            target: TargetId::new(20 + offset),
+        });
+        p.occurrences.push(Occurrence::new(
+            OccurrenceId::new(15 + offset),
+            PaintId::new(13 + offset),
+            SurfaceId::new(14),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            p.occurrences[0].context,
+        ));
+        p.outputs.push(OutputBinding::new(
+            OutputSlotId::new(17 + offset),
+            PaintId::new(13 + offset),
+        ));
+        p.constraints
+            .hard
+            .push(ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(16 + offset),
+                OccurrenceId::new(15 + offset),
+                if distinct_requirement && index == 1 {
+                    Wcag22CriterionV1::Sc143TextLargeScale
+                } else {
+                    Wcag22CriterionV1::Sc143TextDefault
+                },
+            ));
+    }
+    p
+}
+
+#[test]
+fn mixed_reference_composition_counts_equivalent_children_once() {
+    for reverse in [false, true] {
+        let owners = [
+            compile_reference_composition(mixed_repeated_children(false, false), reverse),
+            compile_reference_composition(mixed_repeated_children(true, false), reverse),
+            compile_reference_composition(mixed_repeated_children(true, true), reverse),
+        ];
+        for (index, owner) in owners.iter().enumerate() {
+            let CompiledTargetSelectionV1::Computed(selection) =
+                &owner.owner_generation.target_selection
+            else {
+                panic!("computed reference composition")
+            };
+            assert_eq!(selection.components.len(), 1);
+            assert_eq!(
+                selection.components[0].mode,
+                ProgramSelectionModeV1::JointReferencePeersV1
+            );
+            assert_eq!(
+                selection.components[0].point_variable_count(),
+                if index == 2 { 3 } else { 2 }
+            );
+        }
+        let mut sessions = owners[..2]
+            .iter()
+            .map(|owner| {
+                owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .expect("session")
+            })
+            .collect::<Vec<_>>();
+        for (revision, backdrop) in [(1, 255), (2, 0), (3, 208), (4, 255)] {
+            let mut outputs = Vec::new();
+            for session in &mut sessions {
+                session
+                    .prepare_update(update(revision, backdrop))
+                    .expect("observation")
+                    .commit();
+                let frame = session
+                    .state()
+                    .current_verified()
+                    .expect("feasible composition")
+                    .computed_for_test();
+                outputs.push(
+                    frame
+                        .arena
+                        .storage
+                        .outputs
+                        .iter()
+                        .map(|output| output.paint.source())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert_eq!(
+                &outputs[1][..2],
+                &outputs[0],
+                "backdrop={backdrop}, reverse={reverse}"
+            );
+            assert_eq!(outputs[1][2], outputs[0][1]);
+        }
+    }
+}
+
+#[test]
+fn reference_peers_prune_and_restore_the_authored_hierarchy() {
+    for reverse in [false, true] {
+        let owner = compile_reference_composition(hierarchy(), reverse);
+        let CompiledTargetSelectionV1::Computed(selection) =
+            &owner.owner_generation.target_selection
+        else {
+            panic!("computed reference composition")
+        };
+        assert_eq!(selection.components.len(), 1);
+        assert_eq!(
+            selection.components[0].mode,
+            ProgramSelectionModeV1::JointReferencePeersV1
+        );
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        for (revision, background, expected) in [(1, 0, [177, 134]), (2, 255, [68, 102])] {
+            session
+                .prepare_update(update(revision, background))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("readable hierarchy")
+                .computed_for_test();
+            let sources: Vec<_> = frame
+                .arena
+                .storage
+                .outputs
+                .iter()
+                .map(|output| output.paint.source())
+                .collect();
+            assert_eq!(sources, expected.map(|gray| Srgb8::new([gray; 3])));
+            // This program has one physical observation. The search may
+            // assess two endpoints per product region, exactly once.
+            assert!(frame.search.endpoint_evaluations <= 2 * frame.search.regions);
+            assert_eq!(
+                frame.optimality(),
+                if background == 255 {
+                    ComputedOptimalityV1::Exact
+                } else {
+                    ComputedOptimalityV1::Unfinished
+                },
+                "{:?}",
+                frame.search
+            );
+            assert_eq!(
+                frame.search.completion,
+                if background == 255 {
+                    CompletionV1::AuthoredExact
+                } else {
+                    CompletionV1::Complete
+                }
+            );
+            assert!(frame.search.visited < 4096, "{:?}", frame.search);
+        }
+    }
+}
+
+#[test]
+fn reference_peers_preserve_choice_when_a_redundant_material_joins() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let distance = |a, b| squared_distance(lab(gray(a)), lab(gray(b)));
+    let minimum = 0.20_f64;
+    let expected = (0..=255_u8)
+        .flat_map(|a| (0..=255_u8).map(move |b| [a, b]))
+        .filter(|&[a, b]| distance(a, b).sqrt() >= minimum)
+        .min_by(|&[a, b], &[c, d]| {
+            let profile = |a, b| {
+                let losses = [distance(a, 124), distance(b, 132)];
+                [losses[0].max(losses[1]), losses[0].min(losses[1])]
+            };
+            let a = profile(a, b);
+            let b = profile(c, d);
+            a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1]))
+        })
+        .expect("finite neutral pair");
+    assert_eq!(expected, [99, 159]);
+    let separation = |id, a, b, minimum| {
+        ConstraintInvocation::pair_separation(
+            ConstraintId::new(id),
+            DirectedRelationV1::try_new(OccurrenceId::new(a), vec![OccurrenceId::new(b)])
+                .expect("distinct uses"),
+            VisibleSeparationBoundsV1::new(minimum, 2.0).expect("valid separation"),
+        )
+    };
+    for reverse in [false, true] {
+        for material in [None, Some(false), Some(true)] {
+            for connected in [false, true] {
+                let mut p = hierarchy();
+                p.targets = vec![color(10, 5, 124, 0), color(20, 15, 132, 1)];
+                p.constraints.hard = vec![separation(30, 5, 15, minimum)];
+                if let Some(appearance) = material {
+                    let mut extra = if appearance {
+                        color(40, 45, 0, 2)
+                    } else {
+                        super::tests::target(40, 0, 0, 5, 2)
+                    };
+                    let TargetIntentV1::Computed(value) = &mut extra.intent else {
+                        unreachable!()
+                    };
+                    value.reference_appearance = false;
+                    value.domain = AssignmentDomainV1::Gray { lower: 0, upper: 5 };
+                    p.targets.push(extra);
+                    p.paints.push(Paint::Solid {
+                        id: PaintId::new(43),
+                        target: TargetId::new(40),
+                    });
+                    // A distinct physical input also exercises observed-order
+                    // projection and report refresh with a partial report set.
+                    p.observation_group
+                        .surface_input_ports
+                        .push(SurfaceInputPortId::new(12));
+                    p.reference_inputs
+                        .as_mut()
+                        .expect("reference")
+                        .push((SurfaceInputPortId::new(12), gray(250)));
+                    p.surfaces.push(Surface::Input {
+                        id: SurfaceId::new(44),
+                        input: SurfaceInputPortId::new(12),
+                    });
+                    p.occurrences.push(Occurrence::new(
+                        OccurrenceId::new(45),
+                        PaintId::new(43),
+                        SurfaceId::new(44),
+                        CompositionProfile::EncodedSrgb8SourceOverV1,
+                        p.occurrences[0].context,
+                    ));
+                    p.outputs
+                        .push(OutputBinding::new(OutputSlotId::new(47), PaintId::new(43)));
+                    if connected {
+                        p.constraints.hard.push(separation(50, 5, 45, 0.05));
+                    }
+                } else if connected {
+                    continue;
+                }
+                let owner = compile_reference_composition(p, reverse);
+                let mut session = owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .expect("session");
+                for revision in 1..=2 {
+                    let mut observed = gray_cases(revision, &[255, 255]);
+                    if material.is_some() {
+                        use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
+                        let ObservationPayloadInput::Scenarios(cases) = &mut observed.payload
+                        else {
+                            unreachable!()
+                        };
+                        for (case, input) in cases.scenarios.iter_mut().zip([250, 210]) {
+                            case.bindings.push(SurfaceInputBinding::new(
+                                SurfaceInputPortId::new(12),
+                                ColorSignal::from_srgb8(gray(input)),
+                            ));
+                        }
+                        if revision == 2 {
+                            cases.scenarios.reverse();
+                        }
+                    }
+                    session
+                        .prepare_update(observed)
+                        .expect("observation")
+                        .commit();
+                    let frame = session
+                        .state()
+                        .current_verified()
+                        .expect("feasible composition")
+                        .computed_for_test();
+                    let sources = &frame.arena.storage.outputs;
+                    assert_eq!(
+                        [sources[0].paint.source(), sources[1].paint.source()],
+                        expected.map(gray),
+                        "reverse={reverse}, material={material:?}, connected={connected}"
+                    );
+                    if material.is_some() {
+                        assert_eq!(sources[2].paint.source(), gray(0));
+                    }
+                    let reports = frame.reference_selections().expect("reference reports");
+                    assert_eq!(reports.len(), 2);
+                    let mut reports = [&reports[0], &reports[1]];
+                    reports.sort_unstable_by_key(|report| report.target_id());
+                    for (report, (id, expected)) in reports
+                        .into_iter()
+                        .zip([(10, expected[0]), (20, expected[1])])
+                    {
+                        assert_eq!(report.target_id(), id);
+                        assert!(
+                            report
+                                .cases()
+                                .iter()
+                                .all(|case| case.actual_visible() == gray(expected))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_point_tone_priority_survives_a_redundant_reference_constraint() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let separation = |id, a, b, minimum| {
+        ConstraintInvocation::pair_separation(
+            ConstraintId::new(id),
+            DirectedRelationV1::try_new(OccurrenceId::new(a), vec![OccurrenceId::new(b)])
+                .expect("distinct uses"),
+            VisibleSeparationBoundsV1::new(minimum, 2.0).expect("valid separation"),
+        )
+    };
+    let expected = (0..=255_u8)
+        .filter(|&b| squared_distance(lab(gray(124)), lab(gray(b))).sqrt() >= 0.20)
+        .min_by(|&a, &b| {
+            squared_distance(lab(gray(a)), lab(gray(132)))
+                .total_cmp(&squared_distance(lab(gray(b)), lab(gray(132))))
+        })
+        .expect("feasible second use at the requested first tone");
+    for reverse in [false, true] {
+        for connected in [false, true] {
+            let mut p = hierarchy();
+            p.targets = vec![color(10, 5, 124, 0), color(20, 15, 132, 1)];
+            for target in &mut p.targets {
+                let TargetIntentV1::Computed(value) = &mut target.intent else {
+                    unreachable!()
+                };
+                value.reference_appearance = false;
+            }
+            let TargetIntentV1::Computed(first) = &mut p.targets[0].intent else {
+                unreachable!()
+            };
+            let tone = lab(gray(124))[0];
+            first.intent.as_mut().expect("color use").tone =
+                Some(ToneCurveV1::new(2, vec![[0.0, tone], [1.0, tone]]).expect("constant tone"));
+            p.constraints.hard = vec![separation(30, 5, 15, 0.20)];
+            let mut extra = color(40, 45, 0, 2);
+            let TargetIntentV1::Computed(value) = &mut extra.intent else {
+                unreachable!()
+            };
+            value.domain = AssignmentDomainV1::Gray { lower: 0, upper: 5 };
+            p.targets.push(extra);
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(43),
+                target: TargetId::new(40),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(45),
+                PaintId::new(43),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.outputs
+                .push(OutputBinding::new(OutputSlotId::new(47), PaintId::new(43)));
+            if connected {
+                p.constraints.hard.push(separation(50, 5, 45, 0.05));
+            }
+            let owner = compile_reference_composition(p, reverse);
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            session
+                .prepare_update(update(1, 255))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("feasible composition")
+                .computed_for_test();
+            let outputs = &frame.arena.storage.outputs;
+            assert_eq!(
+                [
+                    outputs[0].paint.source(),
+                    outputs[1].paint.source(),
+                    outputs[2].paint.source()
+                ],
+                [gray(124), gray(expected), gray(0)],
+                "reverse={reverse}, connected={connected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn reference_peers_tone_selects_the_nearest_feasible_surface_across_polarities() {
+    // Enumerate the physical neutral feasibility envelope independently of the
+    // search. A surface in the middle cannot host both levels of text at the
+    // required ratio and minimum contrast, even though each may fit alone.
+    let luma = |gray: u8| {
+        let s = f64::from(gray) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let cr = |a: u8, b: u8| (luma(a.max(b)) + 0.05) / (luma(a.min(b)) + 0.05);
+    let ratio = cr(23, 255) / cr(96, 255);
+    let feasible = |background: u8| {
+        [false, true].into_iter().any(|lighter| {
+            let mut candidates = (0..=255_u8)
+                .filter(|&gray| {
+                    (if lighter {
+                        gray > background
+                    } else {
+                        gray < background
+                    }) && cr(gray, background) >= 4.5
+                })
+                .map(|gray| cr(gray, background));
+            let Some(first) = candidates.next() else {
+                return false;
+            };
+            let (low, high) = candidates.fold((first, first), |(low, high), contrast| {
+                (low.min(contrast), high.max(contrast))
+            });
+            high / low >= ratio
+        })
+    };
+    let nearest = |tone: f64| {
+        (0..=255_u8)
+            .filter(|&gray| feasible(gray))
+            .min_by(|&a, &b| {
+                (luma(a).cbrt() - tone)
+                    .abs()
+                    .total_cmp(&(luma(b).cbrt() - tone).abs())
+            })
+            .expect("nonempty feasibility envelope")
+    };
+    for reverse in [false, true] {
+        let mut p = hierarchy();
+        p.targets = vec![color(10, 5, 23, 0), color(20, 15, 96, 1)];
+        for (index, (id, paint, occurrence, surface, anchor, dark, light, parent)) in [
+            (40, 43, 45, 44, 242, 0.23, 0.96, 4),
+            (50, 53, 55, 54, 255, 0.31, 1.0, 44),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut target = color(id, occurrence, anchor, 2 + index as u64);
+            let TargetIntentV1::Computed(value) = &mut target.intent else {
+                unreachable!()
+            };
+            value.intent.as_mut().expect("computed color intent").tone = Some(
+                ToneCurveV1::new(2, vec![[0.0, dark], [1.0, light]])
+                    .expect("finite authored tone curve"),
+            );
+            p.targets.push(target);
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(paint),
+                target: TargetId::new(id),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(occurrence),
+                PaintId::new(paint),
+                SurfaceId::new(parent),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.surfaces.push(Surface::FromOccurrence {
+                id: SurfaceId::new(surface),
+                occurrence: OccurrenceId::new(occurrence),
+            });
+            p.outputs.push(OutputBinding::new(
+                OutputSlotId::new(id + 7),
+                PaintId::new(paint),
+            ));
+            let members = [60 + 20 * index as u32, 70 + 20 * index as u32];
+            for (member, gray) in members.into_iter().zip([23, 96]) {
+                let occurrence = OccurrenceId::new(member + 5);
+                let paint = PaintId::new(member + 3);
+                p.targets
+                    .push(color(member, member + 5, gray, u64::from(member)));
+                p.paints.push(Paint::Solid {
+                    id: paint,
+                    target: TargetId::new(member),
+                });
+                p.occurrences.push(Occurrence::new(
+                    occurrence,
+                    paint,
+                    SurfaceId::new(surface),
+                    CompositionProfile::EncodedSrgb8SourceOverV1,
+                    p.occurrences[0].context,
+                ));
+                p.outputs
+                    .push(OutputBinding::new(OutputSlotId::new(member + 7), paint));
+                p.constraints
+                    .hard
+                    .push(ConstraintInvocation::visible_unary_hard(
+                        ConstraintId::new(member + 6),
+                        occurrence,
+                        Wcag22CriterionV1::Sc143TextDefault,
+                    ));
+            }
+            p.constraints
+                .hard
+                .push(ConstraintInvocation::preserve_tonal_hierarchy(
+                    ConstraintId::new(100 + index as u32),
+                    members.map(|id| OccurrenceId::new(id + 5)).to_vec(),
+                ));
+        }
+        for target in &mut p.targets {
+            let TargetIntentV1::Computed(value) = &mut target.intent else {
+                unreachable!()
+            };
+            value.domain = AssignmentDomainV1::Gray {
+                lower: 0,
+                upper: 255,
+            };
+        }
+        let owner = compile_reference_composition(p, reverse);
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        for (revision, canvas) in [(1, 0), (2, 22), (3, 217), (4, 255), (5, 22)] {
+            session
+                .prepare_update(update(revision, canvas))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("readable composition")
+                .computed_for_test();
+            let values = &frame.arena.storage.outputs;
+            let surfaces = [
+                values[2].paint.source().bytes()[0],
+                values[3].paint.source().bytes()[0],
+            ];
+            let tone = luma(canvas).cbrt();
+            let expected = [
+                nearest(0.23 + tone * (0.96 - 0.23)),
+                nearest(0.31 + tone * (1.0 - 0.31)),
+            ];
+            assert_eq!(surfaces, expected, "canvas={canvas}, {:?}", frame.search);
+        }
+    }
+}
+
+#[test]
+fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
+    use crate::color_intent::reference_transport::{
+        ReferenceTransportV1, contrast_ratio, polarity,
+    };
+    use crate::constraints::TonalPolarityV1;
+
+    let gray = |value| Srgb8::new([value; 3]);
+    let composite = |source: Srgb8, alpha, backdrop: Srgb8| {
+        Srgb8::new(
+            crate::composition::source_over_srgb8(source.bytes(), alpha, backdrop.bytes())
+                .expect("material"),
+        )
+    };
+    // Both gray domains cross the tree's finite-enumeration threshold. The
+    // chromatic boxes exercise independent channel bounds and encoded rounding.
+    let gray_domains = [
+        AssignmentDomainV1::Gray {
+            lower: 36,
+            upper: 111,
+        },
+        AssignmentDomainV1::Gray {
+            lower: 100,
+            upper: 175,
+        },
+    ];
+    let cube_domains = [
+        AssignmentDomainV1::Cube {
+            lower: [64, 74, 84],
+            upper: [68, 78, 88],
+        },
+        AssignmentDomainV1::Cube {
+            lower: [124, 134, 144],
+            upper: [128, 138, 148],
+        },
+    ];
+    for (domains, anchors, alphas, backdrops) in [
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 0.5],
+            &[0, 20][..],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.25, 0.75],
+            &[128, 160, 200],
+        ),
+        (gray_domains, [gray(68), gray(128)], [0.5, 1.0], &[220, 255]),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.0, 1.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 0.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.0, 0.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 1.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.001, 0.999],
+            &[0, 63, 128, 200, 255],
+        ),
+        (
+            cube_domains,
+            [Srgb8::new([66, 76, 86]), Srgb8::new([126, 136, 146])],
+            [0.55, 0.35],
+            &[0, 127, 240],
+        ),
+    ] {
+        let reference_parent = composite(anchors[1], alphas[1], gray(255));
+        let models = [
+            ReferenceTransportV1::new(
+                composite(anchors[0], alphas[0], reference_parent),
+                reference_parent,
+            ),
+            ReferenceTransportV1::new(reference_parent, gray(255)),
+        ];
+        // Independent complete finite oracle. It uses point composition and
+        // transport only, without region bounds, pruning, seeds or search order.
+        let profile = |tuple: [Srgb8; 2]| {
+            let mut tiers = [[0.0_f64; 2]; 3];
+            for &backdrop in backdrops {
+                let parent = composite(tuple[1], alphas[1], gray(backdrop));
+                let backgrounds = [parent, gray(backdrop)];
+                for target in 0..2 {
+                    let visible = composite(tuple[target], alphas[target], backgrounds[target]);
+                    let direction = polarity(visible, backgrounds[target]);
+                    let (lo, hi) = domains[target].bounds();
+                    let ceiling = match direction {
+                        TonalPolarityV1::Darker => contrast_ratio(
+                            composite(Srgb8::new(lo), alphas[target], backgrounds[target]),
+                            backgrounds[target],
+                        ),
+                        TonalPolarityV1::Lighter => contrast_ratio(
+                            composite(Srgb8::new(hi), alphas[target], backgrounds[target]),
+                            backgrounds[target],
+                        ),
+                        TonalPolarityV1::Equal => 1.0,
+                    };
+                    tiers[0][target] = tiers[0][target]
+                        .max(1.0 - (ceiling / models[target].reference_contrast()).min(1.0));
+                    tiers[1][target] = tiers[1][target].max(squared_distance(
+                        lab(visible),
+                        models[target].lab_for(backgrounds[target], direction),
+                    ));
+                }
+            }
+            for target in 0..2 {
+                tiers[2][target] = squared_distance(lab(tuple[target]), lab(anchors[target]));
+            }
+            for tier in &mut tiers {
+                tier.sort_unstable_by(|a, b| b.total_cmp(a));
+            }
+            tiers
+        };
+        let compare = |left: &[[f64; 2]; 3], right: &[[f64; 2]; 3]| {
+            left.iter()
+                .flatten()
+                .zip(right.iter().flatten())
+                .map(|(a, b)| a.total_cmp(b))
+                .find(|order| *order != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
+        };
+        let identities = anchors.map(|anchor| {
+            ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+                .expect("source identity")
+        });
+        let expected = (0..domains[0].cardinality().expect("finite domain"))
+            .flat_map(|left| {
+                (0..domains[1].cardinality().expect("finite domain"))
+                    .map(move |right| [domains[0].value(left), domains[1].value(right)])
+            })
+            .filter(|tuple| (0..2).all(|target| identities[target].contains(tuple[target])))
+            .map(profile)
+            .min_by(compare)
+            .expect("nonempty tuples");
+        let mut previous = None;
+        for reverse in [false, true] {
+            let mut p = hierarchy();
+            p.constraints = ConstraintSet::new(vec![], vec![]);
+            for target in 0..2 {
+                let mut value = ComputedTargetV1::color(
+                    anchors[target],
+                    2.0,
+                    ColorUseIntentV1 {
+                        identity: identities[target],
+                        appearance: Some(OccurrenceId::new(5 + target as u32 * 10)),
+                        tone: None,
+                    },
+                );
+                value.domain = domains[target];
+                value.reference_appearance = true;
+                p.targets[target].intent = TargetIntentV1::Computed(value);
+                p.opacities.push(OpacityInput::new(
+                    OpacityInputId::new(50 + target as u32),
+                    alphas[target],
+                ));
+                p.paints.push(Paint::Opacity {
+                    id: PaintId::new(60 + target as u32),
+                    source: PaintId::new(3 + target as u32 * 10),
+                    opacity: OpacityInputId::new(50 + target as u32),
+                });
+                p.occurrences[target].subject = PaintId::new(60 + target as u32);
+                p.outputs[target] = OutputBinding::new(
+                    OutputSlotId::new(7 + target as u32 * 10),
+                    PaintId::new(60 + target as u32),
+                );
+            }
+            p.surfaces.push(Surface::FromOccurrence {
+                id: SurfaceId::new(44),
+                occurrence: OccurrenceId::new(15),
+            });
+            p.occurrences[0].against = SurfaceId::new(44);
+            let owner = compile_reference_composition(p, reverse);
+            let CompiledTargetSelectionV1::Computed(selection) =
+                &owner.owner_generation.target_selection
+            else {
+                panic!("computed reference composition")
+            };
+            // Removing a physical dependency changes the decomposition, not
+            // the objective of any remaining reference use.
+            assert!(
+                selection.components.iter().all(
+                    |component| component.mode == ProgramSelectionModeV1::JointReferencePeersV1
+                )
+            );
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            let mut observed = backdrops.to_vec();
+            if reverse {
+                observed.reverse();
+            }
+            session
+                .prepare_update(gray_cases(1, &observed))
+                .expect("cases")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("finite reference result")
+                .computed_for_test();
+            let tuple = std::array::from_fn(|i| frame.arena.storage.outputs[i].paint.source());
+            assert_eq!(
+                profile(tuple),
+                expected,
+                "domains={domains:?}, alpha={alphas:?}, cases={backdrops:?}, tuple={tuple:?}"
+            );
+            // Exhausting RGB8 proves the finite oracle, while the symmetric
+            // policy's continuous minimum remains unproven.
+            assert_eq!(
+                frame.optimality(),
+                ComputedOptimalityV1::Unfinished,
+                "{:?}",
+                frame.search
+            );
+            assert_ne!(frame.search.completion, CompletionV1::BudgetExhausted);
+            if let Some(previous) = previous {
+                assert_eq!(tuple, previous, "declaration and case permutations");
+            }
+            previous = Some(tuple);
+        }
+    }
+}
+
 #[test]
 fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
     let mut p = hierarchy();
@@ -193,6 +1031,10 @@ fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
         panic!()
     };
     assert_eq!(selection.targets[0].declaration.anchor, Srgb8::new([68; 3]));
+    assert_eq!(
+        selection.targets[0].source_anchor_lab,
+        lab(Srgb8::new([68; 3]))
+    );
     assert_eq!(
         selection.targets[0].effective_anchor(),
         Srgb8::new([162; 3])
@@ -559,6 +1401,79 @@ fn singleton(anchor: Srgb8, reference: u8, alpha: f64) -> Program<Wcag22Srgb8V1>
         p.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(51));
     }
     p
+}
+
+#[test]
+fn redundant_reference_relation_preserves_continuous_translucent_tone() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let tone = 0.6012_f64;
+    let expected = (0..=255_u8)
+        .min_by(|&a, &b| {
+            let loss = |source: u8| {
+                let encoded = (f64::from(source) + 255.0) / 510.0;
+                (((encoded + 0.055) / 1.055).powf(2.4).cbrt() - tone).abs()
+            };
+            loss(a).total_cmp(&loss(b))
+        })
+        .expect("nonempty neutral domain");
+    assert_eq!(expected, 2);
+
+    for reverse in [false, true] {
+        for connected in [false, true] {
+            let mut p = singleton(gray(64), 255, 0.5);
+            let TargetIntentV1::Computed(first) = &mut p.targets[0].intent else {
+                unreachable!()
+            };
+            first.intent.as_mut().expect("color use").tone =
+                Some(ToneCurveV1::new(2, vec![[0.0, tone], [1.0, tone]]).expect("constant tone"));
+            p.targets.push(color(20, 15, 64, 1));
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(13),
+                target: TargetId::new(20),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(15),
+                PaintId::new(13),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.outputs
+                .push(OutputBinding::new(OutputSlotId::new(17), PaintId::new(13)));
+            if connected {
+                p.constraints
+                    .hard
+                    .push(ConstraintInvocation::pair_separation(
+                        ConstraintId::new(30),
+                        DirectedRelationV1::try_new(
+                            OccurrenceId::new(5),
+                            vec![OccurrenceId::new(15)],
+                        )
+                        .expect("distinct uses"),
+                        VisibleSeparationBoundsV1::new(0.0, 2.0).expect("redundant separation"),
+                    ));
+            }
+            let owner = compile_reference_composition(p, reverse);
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            session
+                .prepare_update(update(1, 255))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("feasible composition")
+                .computed_for_test();
+            let outputs = &frame.arena.storage.outputs;
+            assert_eq!(
+                [outputs[0].paint.source(), outputs[1].paint.source()],
+                [gray(expected), gray(64)],
+                "reverse={reverse}, connected={connected}"
+            );
+        }
+    }
 }
 
 #[test]

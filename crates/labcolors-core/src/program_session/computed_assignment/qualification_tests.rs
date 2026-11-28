@@ -2,8 +2,7 @@
 
 use super::*;
 use crate::session::SessionState;
-use crate::spaces::oklab::{srgb_linear_to_lms_root, srgb_linear_to_oklab, srgb8_box_oklab_bounds};
-use crate::spaces::srgb::srgb_linear_from_srgb8;
+use crate::spaces::oklab::{srgb8_box_oklab_bounds, srgb8_lms_root, srgb8_to_oklab};
 
 // f64::next_up/down стабилизированы после MSRV 1.85; соседние значения сохраняем точно.
 fn next_up(value: f64) -> f64 {
@@ -22,11 +21,11 @@ fn next_down(value: f64) -> f64 {
 }
 
 fn point(rgb: [u8; 3]) -> [f64; 3] {
-    srgb_linear_to_oklab(srgb_linear_from_srgb8(Srgb8::new(rgb)))
+    srgb8_to_oklab(Srgb8::new(rgb))
 }
 
 fn roots(rgb: [u8; 3]) -> [f64; 3] {
-    srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(rgb)))
+    srgb8_lms_root(Srgb8::new(rgb))
 }
 
 fn score(value: [f64; 3], anchor: [f64; 3]) -> f64 {

@@ -48,6 +48,23 @@ test("WASM budget rejects non-canonical documents and arbitrary headroom", () =>
   );
 });
 
+test("WASM recipe requires an explicit complete profile and supported build target", () => {
+  for (const edit of [
+    (value) => { delete value.recipe.cargoProfile; },
+    (value) => { delete value.recipe.cargoProfile.lto; },
+    (value) => { value.recipe.cargoProfile["opt-level"] = "fast"; },
+    (value) => { value.recipe.cargoProfile["opt-level"] = "2"; },
+    (value) => { value.recipe.cargoProfile["debug-assertions"] = "false"; },
+    (value) => { value.recipe.cargoProfile["codegen-units"] = 0; },
+    (value) => { value.toolchain.cargoProfile = "dev"; },
+    (value) => { value.toolchain.target = "native"; },
+  ]) {
+    const changed = fixtureBudget();
+    edit(changed);
+    assert.throws(() => parseBudgetDocument(canonical(changed), "fixture-budget.json"), /WASM size budget/u);
+  }
+});
+
 test("canonical WASM measurements reject growth beyond the measured ceiling", () => {
   const budget = fixtureBudget();
   const result = evaluateWasmBudget(budget, emptyWasm, budget.measurement.platform);

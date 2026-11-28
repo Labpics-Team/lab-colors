@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { colors, evaluateWcag22 } from "../index.js";
+import init, { colors, compileProgramWire, evaluateWcag22 } from "../index.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
 
@@ -10,6 +10,38 @@ const textPasses = (foreground, background) =>
   evaluateWcag22(hex(foreground), hex(background), "sc-1.4.3-text-default").decision === "pass";
 const grayL = (gray) => Math.cbrt(gray <= 10.31475
   ? gray / (255 * 12.92) : ((gray / 255 + 0.055) / 1.055) ** 2.4);
+
+test("a redundant relation cannot change the continuous tone of translucent material", async () => {
+  const tone = 0.6012;
+  const loss = (source) => Math.abs(grayL((source + 255) / 2) - tone);
+  const expected = Array.from({ length: 256 }, (_, source) => source)
+    .reduce((best, source) => loss(source) < loss(best) ? source : best);
+  assert.equal(expected, 2);
+  for (const reverse of [false, true]) {
+    for (const connected of [false, true]) {
+      const c = colors({ reference: { canvas: "#ffffff" } });
+      const canvas = c.surface("canvas");
+      const uses = {};
+      for (const key of reverse ? ["b", "a"] : ["a", "b"]) {
+        const role = c.role(key, "#404040", { domain: "neutral" });
+        uses[key] = key === "a"
+          ? role.on(canvas, { opacity: 0.5, tone: { from: canvas, curve: [[0, tone], [1, tone]] } })
+          : role.on(canvas);
+      }
+      if (connected) c.separate(uses.a, uses.b, [0, 2]);
+      const program = await c.compile({ a: uses.a, b: uses.b });
+      try {
+        const frame = program.resolve({ canvas: "#ffffff" });
+        assert.equal(frame.state, "ready");
+        assert.deepEqual(frame.values.a.rgb, [expected, expected, expected]);
+        assert.equal(frame.values.a.opacity, 0.5);
+        assert.deepEqual(frame.values.b.rgb, [64, 64, 64]);
+        const material = frame.reference.find((entry) => entry.outputs.includes("a"));
+        assert.deepEqual(material.cases[0].actualVisible, [129, 129, 129]);
+      } finally { program.dispose(); }
+    }
+  }
+});
 
 async function hierarchy({ reverse = false, extra = false, aliases = false } = {}) {
   const c = colors({ reference: { canvas: "#ffffff", ...(extra ? { aside: "#ffffff" } : {}) } });
@@ -72,7 +104,7 @@ test("an independent implicit-reference component neither changes Point choice n
       assert.equal(frame.optimality, "unfinished", "the Point hierarchy has only a byte-domain result");
       assert.deepEqual(frame.values.a, baseline.values.a);
       assert.deepEqual(frame.values.b, baseline.values.b);
-      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
+      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "joint-reference-peers-v1"]);
       const point = frame.selection.find((component) => component.mode === "joint-point-v1");
       assert.deepEqual(new Set(point.uses.flatMap((use) => use.outputs)), new Set(["a", "b"]));
     }
@@ -99,7 +131,7 @@ test("ordinary Point search constructs a readable first result from an infeasibl
   } finally { program.dispose(); }
 });
 
-test("an independent completed reference search preserves the proven optimum of a constant Point use", async () => {
+test("an independent reference search preserves a constant Point use across changes", async () => {
   const c = colors({ reference: { canvas: "#ffffff", paper: "#ffffff" } });
   const canvas = c.surface("canvas"), paper = c.surface("paper");
   const overlay = c.role("overlay", "#888888").on(canvas, {
@@ -112,8 +144,8 @@ test("an independent completed reference search preserves the proven optimum of 
     for (const paper of ["#ffffff", "#000000", "#000000", "#ffffff"]) {
       const frame = program.resolve({ canvas: "#ffffff", paper });
       assert.equal(frame.state, "ready");
-      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
-      assert.equal(frame.optimality, "exact");
+      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "joint-reference-peers-v1"]);
+      assert.equal(frame.optimality, paper === "#ffffff" ? "exact" : "unfinished");
       assert.deepEqual(frame.values.overlay.rgb, [136, 136, 136]);
       if (paper === "#000000") assert.notDeepEqual(frame.values.ink.rgb, [34, 34, 34]);
     }
@@ -195,4 +227,101 @@ test("moving a translucent fill reopens the choice of its neutral ink", async ()
     // Independently feasible pair: source #0022ba with ink #1b1b1b.
     assert.ok(distance(closest) <= distance(27));
   } finally { program.dispose(); }
+});
+
+test("a branded text hierarchy commits on colored paper independently of declaration order", async () => {
+  const surfaces = { paper: "#f7f3ed", aside: "#ffffff" };
+  async function compile(reverse) {
+    const c = colors({ reference: surfaces }), paper = c.surface("paper");
+    const roles = [c.role("heading", "#314dac"), c.role("caption", "#5362aa")];
+    const uses = [];
+    for (const index of reverse ? [1, 0] : [0, 1]) {
+      uses[index] = roles[index].on(paper, { contrast: "wcag22-text" });
+    }
+    c.preserveTonalHierarchy(uses);
+    const glaze = c.role("glaze", "#b64c2c").on(c.surface("aside"), { opacity: 0.72 });
+    const mark = c.role("mark", "#352310").on(glaze, { contrast: "wcag22-text" });
+    return c.compile({ heading: uses[0], caption: uses[1], glaze, mark });
+  }
+  const first = await compile(false), second = await compile(true);
+  try {
+    for (const paper of ["#f7f3ed", "#152537", "#8f8599", "#f7f3ed"]) {
+      const direct = first.resolve({ paper, aside: "#f7f3ed" });
+      const reverse = second.resolve({ paper, aside: "#f7f3ed" });
+      assert.equal(direct.state, "ready");
+      assert.equal(reverse.state, "ready");
+      assert.deepEqual(direct.values, reverse.values);
+      assert.deepEqual(direct.selection.map((part) => part.mode).sort(),
+        ["joint-reference-peers-v1", "joint-reference-peers-v1"]);
+      const glaze = direct.values.glaze;
+      const visibleGlaze = glaze.rgb.map((v, i) => Math.round(direct.context.aside[i] + glaze.opacity * (v - direct.context.aside[i])));
+      assert.equal(glaze.opacity, 0.72);
+      assert.ok(textPasses(direct.values.mark.rgb, visibleGlaze));
+      for (const name of ["heading", "caption"]) {
+        const value = direct.values[name].rgb;
+        assert.ok(textPasses(value, direct.context.paper));
+        assert.ok(value[2] > value[0], "the source remains blue");
+        const reference = direct.reference.find((use) => use.outputs.includes(name));
+        assert.equal(reference.capacity, null, "a physical limit does not prove feasible contrast capacity");
+      }
+      const movedAside = first.resolve({ paper, aside: "#152537" });
+      assert.equal(movedAside.state, "ready");
+      assert.deepEqual(movedAside.values.heading, direct.values.heading);
+      assert.deepEqual(movedAside.values.caption, direct.values.caption);
+      if (paper === surfaces.paper) {
+        assert.deepEqual(direct.values.heading.rgb, [49, 77, 172]);
+        assert.deepEqual(direct.values.caption.rgb, [83, 98, 170]);
+      }
+    }
+  } finally { first.dispose(); second.dispose(); }
+});
+
+test("observed backgrounds distinguish structurally interchangeable ports before finite reference search", async () => {
+  function declare(reverse, source, opacity, range) {
+    const c = colors({ reference: { a: "#ffffff", b: "#ffffff" } });
+    const surfaces = { a: c.surface("a"), b: c.surface("b") }, uses = {};
+    for (const id of reverse ? ["b", "a"] : ["a", "b"]) {
+      uses[id] = c.role(id, source, { domain: "neutral" }).on(surfaces[id], { opacity });
+    }
+    c.separate(uses.a, uses.b, range);
+    return { c, outputs: { A: uses.a, B: uses.b } };
+  }
+  for (const [source, opacity, range, env] of [
+    ["#686868", .78, [.16, 1], { a: "#f5f5f5", b: "#d9d9d9" }],
+    ["#949494", .28, [0, .20], { a: "#410eea", b: "#402f47" }],
+  ]) {
+    const build = (reverse) => declare(reverse, source, opacity, range);
+    const a = build(false), b = build(true);
+    const forward = await a.c.compile(a.outputs), reverse = await b.c.compile(b.outputs);
+    try {
+      for (const context of [env, { a: env.b, b: env.a }, env]) {
+        const left = forward.resolve(context), right = reverse.resolve(context);
+        assert.equal(left.state, right.state);
+        if (source === "#686868") assert.equal(left.state, "ready");
+        if (left.state === "ready") {
+          assert.deepEqual(left.values.A, right.values.A);
+          assert.deepEqual(left.values.B, right.values.B);
+        }
+      }
+    } finally { forward.dispose(); reverse.dispose(); }
+  }
+  function correlated(reverse, rows) {
+    const { c, outputs } = declare(reverse, "#686868", .78, [.10, 1]);
+    const artifact = c.encode(outputs), runtime = compileProgramWire(artifact.bytes, 1);
+    const bytes = Uint8Array.from(rows.flatMap(row =>
+      artifact.inputs.flatMap(({ name }) => Array(3).fill(row[name]))));
+    try {
+      const snapshot = runtime.updateObserved(1n, Uint32Array.from(rows, (_, i) => i + 1), bytes, artifact.inputs.length);
+      try {
+        const slots = new Map(Array.from({ length: snapshot.outputCount() }, (_, i) => [snapshot.outputSlot(i), i]));
+        return { state: snapshot.state, rgb: artifact.outputs.map(({slot}) => [...snapshot.outputRgb(slots.get(slot))]) };
+      } finally { snapshot.free(); }
+    } finally { runtime.free(); }
+  }
+  // Equal per-port extrema and colour multisets, with a different pairing of
+  // the middle rows. A per-port aggregate cannot orient all of these inputs.
+  const rows = [{ a: 186, b: 197 }, { a: 197, b: 221 }, { a: 221, b: 186 }];
+  const original = correlated(false, rows);
+  assert.equal(original.state, "ready");
+  assert.deepEqual(correlated(true, rows.toReversed()), original);
 });

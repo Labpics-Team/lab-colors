@@ -15,6 +15,103 @@ const contrast = (value, background) => {
   return (Math.max(visible, backdrop) + 0.05) / (Math.min(visible, backdrop) + 0.05);
 };
 
+test("declared surface tone survives inferred text contrast across nested themes", async () => {
+  const c = colors({ reference: { canvas: "#ffffff" } }), canvas = c.surface("canvas");
+  const tone = (dark, light) => ({ from: canvas, curve: [[0, dark], [0.25, dark], [1, light]] });
+  const panel = c.role("panel", "#f2f2f2", { domain: "neutral" }).on(canvas, { tone: tone(0.23, 0.96) });
+  const sheet = c.role("sheet", "#ffffff", { domain: "neutral" }).on(panel, { tone: tone(0.31, 1) });
+  const strong = c.role("primary", "#171717", { domain: "neutral" });
+  const weak = c.role("secondary", "#606060", { domain: "neutral" });
+  const outputs = { panel, sheet };
+  for (const [name, surface] of [["base", canvas], ["panel", panel], ["sheet", sheet]]) {
+    const primary = strong.on(surface, { contrast: "wcag22-text" });
+    const secondary = weak.on(surface, { contrast: "wcag22-text" });
+    c.preserveTonalHierarchy([primary, secondary]);
+    outputs[`${name}Primary`] = primary;
+    outputs[`${name}Secondary`] = secondary;
+  }
+  // On the neutral axis, Oklab L is the cube root of linear intensity.
+  const nearest = (lightness) => Array.from({ length: 256 }, (_, value) => value)
+    .reduce((a, b) => Math.abs(Math.cbrt(luminance(b)) - lightness) < Math.abs(Math.cbrt(luminance(a)) - lightness) ? b : a);
+  const program = await c.compile(outputs);
+  try {
+    const light = program.resolve({ canvas: "#ffffff" });
+    assert.equal(light.state, "ready");
+    assert.equal(light.values.panel.rgb[0], nearest(0.96));
+    assert.equal(light.values.sheet.rgb[0], 255);
+    const authoredRatio = contrast(light.values.basePrimary, 255) / contrast(light.values.baseSecondary, 255);
+    for (const canvasGray of [0, 22]) {
+      const frame = program.resolve({ canvas: [canvasGray, canvasGray, canvasGray] });
+      assert.equal(frame.state, "ready");
+      const { values } = frame;
+      assert.equal(values.panel.rgb[0], nearest(0.23));
+      assert.equal(values.sheet.rgb[0], nearest(0.31));
+      for (const [name, background] of [["base", canvasGray], ["panel", values.panel.rgb[0]], ["sheet", values.sheet.rgb[0]]]) {
+        const primary = values[`${name}Primary`], secondary = values[`${name}Secondary`];
+        assert.ok(primary.rgb[0] > secondary.rgb[0] && secondary.rgb[0] > background);
+        assert.ok(textPasses(primary.rgb, background) && textPasses(secondary.rgb, background));
+        assert.ok(contrast(primary, background) / contrast(secondary, background) >= authoredRatio - 1e-12);
+      }
+      assert.notDeepEqual(values.panelSecondary.rgb, values.sheetSecondary.rgb);
+    }
+    assert.deepEqual(program.resolve({ canvas: "#ffffff" }).values, light.values);
+  } finally { program.dispose(); }
+});
+
+test("nested linear surface tones choose the nearest readable colors across disconnected feasible ranges", async () => {
+  const grays = Array.from({ length: 256 }, (_, value) => value);
+  const cr = (a, b) => (luminance(Math.max(a, b)) + 0.05) / (luminance(Math.min(a, b)) + 0.05);
+  const requiredRatio = cr(23, 255) / cr(96, 255);
+  const feasible = grays.filter((background) => [false, true].some((lighter) => {
+    const ratios = grays.filter((gray) => (lighter ? gray > background : gray < background)
+      && cr(gray, background) >= 4.5).map((gray) => cr(gray, background));
+    return ratios.length && Math.max(...ratios) / Math.min(...ratios) >= requiredRatio;
+  }));
+  const nearest = (tone) => feasible.reduce((a, b) =>
+    Math.abs(Math.cbrt(luminance(b)) - tone) < Math.abs(Math.cbrt(luminance(a)) - tone) ? b : a);
+  const frames = [0, 22, 217, 255, 22];
+  const results = [];
+  for (const reverse of [false, true]) {
+    const c = colors({ reference: { canvas: "#ffffff" } }), canvas = c.surface("canvas");
+    const tone = (dark, light) => ({ from: canvas, curve: [[0, dark], [1, light]] });
+    const panel = c.role("panel", "#f2f2f2", { domain: "neutral" }).on(canvas, { tone: tone(0.23, 0.96) });
+    const sheet = c.role("sheet", "#ffffff", { domain: "neutral" }).on(panel, { tone: tone(0.31, 1) });
+    const strong = c.role("primary", "#171717", { domain: "neutral" });
+    const weak = c.role("secondary", "#606060", { domain: "neutral" });
+    const outputs = { panel, sheet };
+    const surfaces = [["base", canvas], ["panel", panel], ["sheet", sheet]];
+    if (reverse) surfaces.reverse();
+    for (const [name, surface] of surfaces) {
+      const primary = strong.on(surface, { contrast: "wcag22-text" });
+      const secondary = weak.on(surface, { contrast: "wcag22-text" });
+      c.preserveTonalHierarchy([primary, secondary]);
+      outputs[`${name}Primary`] = primary;
+      outputs[`${name}Secondary`] = secondary;
+    }
+    const program = await c.compile(outputs);
+    try {
+      for (const [index, background] of frames.entries()) {
+        const frame = program.resolve({ canvas: [background, background, background] });
+        assert.equal(frame.state, "ready", `canvas ${background}`);
+        const { values } = frame;
+        const t = Math.cbrt(luminance(background));
+        assert.equal(values.panel.rgb[0], nearest(0.23 + t * (0.96 - 0.23)));
+        assert.equal(values.sheet.rgb[0], nearest(0.31 + t * (1 - 0.31)));
+        for (const [name, gray] of [["base", background], ["panel", values.panel.rgb[0]], ["sheet", values.sheet.rgb[0]]]) {
+          const primary = values[`${name}Primary`], secondary = values[`${name}Secondary`];
+          assert.ok(textPasses(primary.rgb, gray) && textPasses(secondary.rgb, gray));
+          assert.ok((primary.rgb[0] - gray) * (secondary.rgb[0] - gray) > 0);
+          assert.ok(contrast(primary, gray) / contrast(secondary, gray) >= requiredRatio - 1e-12);
+        }
+        const physical = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, [value.rgb, value.opacity]]));
+        if (reverse) assert.deepEqual(physical, results[index]);
+        else results.push(physical);
+      }
+    } finally { program.dispose(); }
+  }
+  assert.deepEqual(results[1], results[4]);
+});
+
 test("one authored tonal relation survives a polarity change and returns without drift", async () => {
   const reference = { canvas: [255, 255, 255] };
   const c = colors({ reference }), canvas = c.surface("canvas");

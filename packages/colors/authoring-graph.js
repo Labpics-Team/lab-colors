@@ -136,8 +136,10 @@ export function lowerColorSystem(entries, options, rasterProposal) {
     return [input.port, rgb];
   });
   // Even an all-fixed declaration gets one complete tuple check under V3.
-  builder.compose(declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
-    .map((node) => nodes.get(node).target), { reference });
+  const adaptive = declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
+    .map((node) => nodes.get(node).target);
+  if (reference === undefined) builder.compose(adaptive);
+  else builder.composeReference(adaptive, reference);
 
   const outputNodes = new Map();
   for (const node of [...new Set(entries.map((entry) => entry.node))].sort(declaredOrder)) {
@@ -147,7 +149,7 @@ export function lowerColorSystem(entries, options, rasterProposal) {
     outputNodes.set(node, { slot, node });
   }
   const outputs = entries.map(({ name, node }) => {
-    if (inputs.some((input) => input.name === name)) authoringError(`compile.outputs.${name}`, "output aliases must not shadow input names");
+    if (inputs.some((input) => input.name === name)) authoringError(`${options.operation}.outputs.${name}`, "output aliases must not shadow input names");
     return Object.freeze({ name, ...outputNodes.get(node) });
   });
   // Compile aliases once; frame projection stays linear in the number of uses.

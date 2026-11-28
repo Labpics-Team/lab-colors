@@ -151,7 +151,7 @@ export interface ColorAdaptiveRole {
   readonly [colorHandle]: "adaptive-role";
   readonly id: string;
   readonly anchor: readonly [number, number, number];
-  /** Новый local use в порядке предпочтений декларации; повторный handle сохраняет один paint. */
+  /** Новое локальное применение. Повторный handle сохраняет один общий paint. */
   on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse<ColorAdaptiveRole>;
 }
 
@@ -300,15 +300,18 @@ export interface ColorView<Name extends string = string, State extends Displayab
 /** Result for one complete, opaque sRGB8 reference bitmap in the same renderer context. */
 export type ColorRasterResult<Name extends string = string> =
   | Readonly<{ state: "ready"; scope: "renderer-bitmap"; image: ImageData;
+      fieldRelation: "not-dirtier" | "incomparable" | "unavailable";
       frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }> } & (
         | { relation: "preserved" | "restored"; basis: "exact-bitmap-identity" }
         | { relation: "unavailable"; reason: "incomparable-bitmap" | "no-reference-paints"
             | "different-bitmap" | "search-limit" | "proposal-limit" | "no-ready-proposal" }
       )>
-  | Readonly<{ state: "unavailable"; proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
+  | Readonly<{ state: "unavailable"; fieldRelation: "unavailable";
+      proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
 
 export interface ColorRasterReference<Name extends string = string> {
-  resolve(surfaces: ColorContext): ColorRasterResult<Name>;
+  /** Declare the same viewing conditions as capture to assess the field returned in this update. */
+  resolve(surfaces: ColorContext, options?: { readonly sameViewingContext?: boolean }): ColorRasterResult<Name>;
   dispose(): void;
 }
 
@@ -328,6 +331,14 @@ export interface ColorProgram<Name extends string = string> {
   dispose(): void;
 }
 
+/** A Program V3 declaration and the names needed to use its ports and output slots. */
+export interface EncodedColorSystem<Name extends string = string> {
+  /** Owned by this invocation. Mutating these bytes cannot change other programs. */
+  readonly bytes: Uint8Array;
+  readonly inputs: readonly Readonly<{ name: string; port: number }>[];
+  readonly outputs: readonly Readonly<{ name: Name; slot: number }>[];
+}
+
 export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorAdaptiveRole;
@@ -336,8 +347,13 @@ export interface ColorSystem {
   separate(left: ColorUse, right: ColorUse, range: readonly [number, number]): void;
   /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
   preserveTonalHierarchy(members: readonly ColorUse[]): void;
+  /** Encode once at build time for distribution to compatible Core runtimes. */
+  encode<const Outputs extends Readonly<Record<string, ColorUse>>>(
+    outputs: Outputs,
+  ): EncodedColorSystem<Extract<keyof Outputs, string>>;
   /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.
-   * Компоненты с неявным reference сохраняют последовательный режим совместимости; frame.selection раскрывает режим.
+   * Связанные reference-применения, включая вложенные адаптивные подложки, подбираются совместно.
+   * Режим каждой группы доступен в frame.selection.
    */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,

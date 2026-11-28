@@ -13,9 +13,9 @@ export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
   "packages/colors/bench/wasm.json",
 );
-export const WASM_BUDGET_FILE_SHA256 = "15d11ac682c7d5d20e05a3b5c8e67e5a8d328c87ae22bb416f37862a1d4cfec3";
+export const WASM_BUDGET_FILE_SHA256 = "e53f3ab351fec919f91f5e0601452cadf4247e0bf6fa4aa8d6e94429c2a1f90e";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const CANONICAL_ARTIFACT = "packages/colors/pkg/labcolors_bg.wasm";
 const CANONICAL_PLATFORM = "linux-x64";
 const TOOLCHAIN_KEYS = [
@@ -90,7 +90,22 @@ function validateBudgetValue(budget) {
     nonEmptyLine(budget.toolchain[key], `toolchain.${key}`);
   }
 
-  exactKeys(budget.recipe, ["rustPathRemap", "commands"], "recipe");
+  if (budget.toolchain.cargoProfile !== "release" || budget.toolchain.target !== "wasm32-unknown-unknown") {
+    fail("toolchain must select the supported release WASM target");
+  }
+  exactKeys(budget.recipe, ["cargoProfile", "rustPathRemap", "commands"], "recipe");
+  const profile = budget.recipe.cargoProfile;
+  exactKeys(profile, ["opt-level", "debug", "split-debuginfo", "strip", "debug-assertions", "overflow-checks",
+    "lto", "panic", "incremental", "codegen-units", "rpath"], "recipe.cargoProfile");
+  if (![0, 1, 2, 3, "s", "z"].includes(profile["opt-level"])) fail("invalid recipe.cargoProfile.opt-level");
+  for (const key of ["debug", "debug-assertions", "overflow-checks", "incremental", "rpath"]) {
+    if (typeof profile[key] !== "boolean") fail(`recipe.cargoProfile.${key} must be a boolean`);
+  }
+  if (profile["split-debuginfo"] !== "off" || profile.strip !== "symbols" ||
+      profile.lto !== "fat" || profile.panic !== "abort") {
+    fail("recipe.cargoProfile must retain the supported WASM link and debug settings");
+  }
+  positiveSafeInteger(profile["codegen-units"], "recipe.cargoProfile.codegen-units");
   if (
     !Array.isArray(budget.recipe.rustPathRemap) ||
     budget.recipe.rustPathRemap.length === 0 ||

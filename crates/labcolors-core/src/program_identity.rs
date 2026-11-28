@@ -8,6 +8,10 @@
 use super::*;
 use crate::colored_graph::{EdgeV1, ordering};
 
+#[path = "program_identity/observed_order.rs"]
+mod observed_order;
+pub(crate) use observed_order::{ObservedComponentOrder, PeerSearchGraph};
+
 const DOMAIN_V9: &[u8] = b"labcolors.program-content-identity.v9\0";
 const AUTHORED_COMPOSITION_DOMAIN_V1: &[u8] =
     b"labcolors.authored-composition-program.v1.component-joint-point.legacy-reference-ordered.full-recheck\0";
@@ -135,6 +139,7 @@ pub(crate) enum CanonicalPreferenceV1 {
     Ordered(u64),
     JointPoint,
     LegacyReferenceOrdered(u64),
+    JointReferencePeers,
 }
 
 /// Temporary compiler input, sorted by target ID for binding lookup only.
@@ -158,6 +163,7 @@ pub(crate) struct CanonicalExecutionLayoutV1 {
 pub(crate) struct CompiledProgramIdentityV1 {
     pub(crate) content: ProgramOwnerIdentityV1,
     pub(crate) execution: Option<CanonicalExecutionLayoutV1>,
+    pub(crate) peer_order: Option<ProgramIdentityGraphV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -310,7 +316,9 @@ declare_edge_roles_v1! {
 
 type CanonicalGraphV1 = crate::colored_graph::ColoredGraph<VertexColorV1>;
 
-struct ProgramIdentityGraphV1 {
+#[derive(Debug)]
+pub(crate) struct ProgramIdentityGraphV1 {
+    hard: Vec<(ConstraintId, usize)>,
     graph: CanonicalGraphV1,
     computed_targets: Vec<(TargetId, usize)>,
     inputs: Vec<(SurfaceInputPortId, usize)>,
@@ -318,14 +326,21 @@ struct ProgramIdentityGraphV1 {
 
 impl ProgramIdentityGraphV1 {
     fn into_execution_layout(
-        mut self,
+        self,
         order: &[usize],
-    ) -> Result<CanonicalExecutionLayoutV1, ProgramCompileError> {
-        let vertex_count = self.graph.vertex_count();
+    ) -> Result<(CanonicalExecutionLayoutV1, Option<Self>), ProgramCompileError> {
+        let Self {
+            graph,
+            hard,
+            mut computed_targets,
+            mut inputs,
+        } = self;
+        let vertex_count = graph.vertex_count();
+        // Only multi-port reference peers may need the topology after projection.
+        let peer_graph = (!hard.is_empty()).then_some(graph);
         if order.len() != vertex_count {
             return Err(ProgramCompileError::InternalInvariant);
         }
-        drop(self.graph);
         let mut rank_of = Vec::new();
         rank_of
             .try_reserve_exact(vertex_count)
@@ -354,10 +369,21 @@ impl ProgramIdentityGraphV1 {
             keys.extend(bindings.iter().map(|&(key, _)| key));
             Ok(keys.into_boxed_slice())
         }
-        Ok(CanonicalExecutionLayoutV1 {
-            targets: project(&mut self.computed_targets, &rank_of)?,
-            inputs: project(&mut self.inputs, &rank_of)?,
-        })
+        let layout = CanonicalExecutionLayoutV1 {
+            targets: project(&mut computed_targets, &rank_of)?,
+            inputs: project(&mut inputs, &rank_of)?,
+        };
+        let peer_order = peer_graph.map(|graph| {
+            ordering::sort_by_key(&mut inputs, |entry| entry.0);
+            ordering::sort_by_key(&mut computed_targets, |entry| entry.0);
+            Self {
+                graph,
+                hard,
+                computed_targets,
+                inputs,
+            }
+        });
+        Ok((layout, peer_order))
     }
 }
 
@@ -1018,7 +1044,7 @@ fn add_constraint_graph_binding<Evaluation>(
     context: &ConstraintGraphBindingContextV1<'_, Evaluation>,
     mode_tag: u8,
     body: &ProgramConstraintBodyV1<ProgramConstraintInvocationOf<Evaluation>>,
-) -> Result<(), ProgramCompileError>
+) -> Result<usize, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
@@ -1160,7 +1186,8 @@ where
         vertex,
         context.observation_group,
         EdgeRoleV1::ObservationGroup,
-    )
+    )?;
+    Ok(vertex)
 }
 
 fn build_graph<Evaluation>(
@@ -1530,14 +1557,28 @@ where
         occurrences: &occurrences,
         observation_group: group,
     };
+    let peers = preferences.is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.preference == CanonicalPreferenceV1::JointReferencePeers)
+    });
+    let mut hard = Vec::new();
+    if peers {
+        hard.try_reserve_exact(program.constraints.hard.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    }
     for constraint in &program.constraints.hard {
-        add_constraint_graph_binding(
+        let vertex = add_constraint_graph_binding(
             &mut graph,
             &constraint_context,
             vertex_tag::CONSTRAINT_HARD,
             constraint.body(),
         )?;
+        if peers {
+            hard.push((constraint.id(), vertex));
+        }
     }
+    ordering::sort_by_key(&mut hard, |entry| entry.0);
     for constraint in &program.constraints.report_only {
         add_constraint_graph_binding(
             &mut graph,
@@ -1587,6 +1628,7 @@ where
     }
 
     Ok(ProgramIdentityGraphV1 {
+        hard,
         graph: graph.finish()?,
         computed_targets: computed_targets.values,
         inputs: ports.values,
@@ -1736,6 +1778,7 @@ where
         return Ok(CompiledProgramIdentityV1 {
             content: compile_owner_identity(program)?,
             execution: None,
+            peer_order: None,
         });
     }
     let built = build_identity_graph(program, Some(preferences))?;
@@ -1747,10 +1790,11 @@ where
     // Retain only the leaf binding while projecting typed keys. The potentially
     // much larger serialization is no longer needed after its content digest.
     drop(form.preimage);
-    let execution = built.into_execution_layout(&form.order)?;
+    let (execution, peer_order) = built.into_execution_layout(&form.order)?;
     Ok(CompiledProgramIdentityV1 {
         content,
         execution: Some(execution),
+        peer_order,
     })
 }
 

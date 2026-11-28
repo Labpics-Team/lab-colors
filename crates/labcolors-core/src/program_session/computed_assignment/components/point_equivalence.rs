@@ -1,4 +1,4 @@
-//! Substitution-equivalent leaf choices in the idempotent Point profile.
+//! Substitution-equivalent leaf choices in joint composition profiles.
 //!
 //! Matching colours or automorphic vertices are insufficient: a pairwise
 //! separation or a downstream use can require different source values. This

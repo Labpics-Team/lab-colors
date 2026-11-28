@@ -4,12 +4,11 @@
 use super::*;
 
 impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
-    /// The caller must first establish hard feasibility of the authored tuple.
-    /// Its source distances are exactly zero by source identity. Each primary
-    /// distance below either attains zero or is invariant throughout a box
-    /// enclosing the complete source domain. Thus no primary order statistic
-    /// can decrease, and no secondary source distance can improve on zero.
-    pub(in crate::program_session::computed_assignment::contextual) fn authored_point_optimal(
+    /// Each continuous Point/Tone term of the authored tuple either attains zero
+    /// or is invariant throughout a box enclosing the complete source domain.
+    /// The source distances of that tuple are zero by identity. This proof
+    /// leaves hard feasibility and the operational transport terms to the caller.
+    pub(in crate::program_session::computed_assignment::contextual) fn authored_continuous_terms_minimal(
         &mut self,
         component: &ComputedComponentV1,
         cases: &[usize],
@@ -17,14 +16,6 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
         let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
-        if component.targets.iter().any(|&target| {
-            matches!(
-                selection.targets[target].preferred_intent(),
-                CompiledPreferredIntentV1::ImplicitReference
-            )
-        }) {
-            return Ok(false);
-        }
         let storage = &mut *self.scratch;
         let count = component.targets.len();
         let rows = count
@@ -79,6 +70,14 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                     if whole_domain && storage.authored_minimum_rows[row] {
                         continue;
                     }
+                    // This proof concerns only the continuous Point/Tone terms.
+                    // A mixed caller must establish its transport minima too.
+                    if storage.uses[target].point_anchor.is_none() {
+                        if !whole_domain {
+                            storage.authored_minimum_rows.push(true);
+                        }
+                        continue;
+                    }
                     let visible = if let Some(slot) = storage.uses[target].slot {
                         view.occurrence_at(slot)
                             .ok_or(Error::<E>::InvalidUse)?
@@ -94,16 +93,27 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                             return Ok(false);
                         }
                     } else {
-                        let unmodified_anchor = matches!(
-                            selection.targets[target].preferred_intent(),
+                        let minimum = match selection.targets[target].preferred_intent() {
                             CompiledPreferredIntentV1::Point {
                                 tone: None,
                                 anchor: PreferredPointAnchorV1::AuthoredSource,
-                            }
-                        );
-                        storage
-                            .authored_minimum_rows
-                            .push(unmodified_anchor && visible.proves_equal(source(target)?));
+                            } => visible.proves_equal(source(target)?),
+                            CompiledPreferredIntentV1::Point {
+                                tone: None,
+                                anchor: PreferredPointAnchorV1::ReferenceVisible,
+                            } => self
+                                .epoch
+                                .reference_inputs
+                                .as_ref()
+                                .is_some_and(|reference| {
+                                    selection.factors[storage.uses[target].factor]
+                                        .inputs
+                                        .iter()
+                                        .all(|&index| inputs[index].srgb8() == reference[index].1)
+                                }),
+                            _ => false,
+                        };
+                        storage.authored_minimum_rows.push(minimum);
                     }
                 }
             }

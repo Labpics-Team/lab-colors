@@ -59,6 +59,13 @@ impl RasterChoice {
         self.selection().action().as_str().into()
     }
 
+    pub fn field_relation(&self, same_viewing_context: bool) -> String {
+        self.selection()
+            .field_relation(same_viewing_context)
+            .as_str()
+            .into()
+    }
+
     pub fn inspect(&self, width: u32, height: u32, rgba: Vec<u8>) {
         let same = self.reference.0.same_field(width, height, &rgba);
         self.selection().observe(same.into());

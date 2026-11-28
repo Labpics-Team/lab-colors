@@ -1191,6 +1191,7 @@ impl ObservationGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ComputedSelectionPolicyV1 {
     Ordered(Vec<TargetId>),
+    ReferenceComposition(Vec<TargetId>),
     AuthoredComposition {
         legacy_reference_order: Vec<TargetId>,
     },
@@ -1199,7 +1200,7 @@ pub(crate) enum ComputedSelectionPolicyV1 {
 impl ComputedSelectionPolicyV1 {
     pub(crate) fn legacy_order(&self) -> &[TargetId] {
         match self {
-            Self::Ordered(order) => order,
+            Self::Ordered(order) | Self::ReferenceComposition(order) => order,
             Self::AuthoredComposition {
                 legacy_reference_order,
             } => legacy_reference_order,
@@ -1207,7 +1208,10 @@ impl ComputedSelectionPolicyV1 {
     }
 
     pub(crate) fn authored_composition(&self) -> bool {
-        matches!(self, Self::AuthoredComposition { .. })
+        matches!(
+            self,
+            Self::AuthoredComposition { .. } | Self::ReferenceComposition(_)
+        )
     }
 }
 
@@ -1409,6 +1413,10 @@ impl CoreProgramDraftV1 {
 
     pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
         self.program.assignment = Some(ComputedSelectionPolicyV1::Ordered(order));
+    }
+
+    pub(crate) fn set_reference_composition(&mut self, targets: Vec<TargetId>) {
+        self.program.assignment = Some(ComputedSelectionPolicyV1::ReferenceComposition(targets));
     }
 
     pub(crate) fn set_composition(&mut self, legacy_reference_order: Vec<TargetId>) {
@@ -6112,6 +6120,9 @@ where
         )?;
         if let Some(layout) = &compiled_identity.execution {
             selection.canonicalize_inputs(layout, &graph)?;
+        }
+        if let Some(topology) = &compiled_identity.peer_order {
+            selection.compile_peer_schedules(topology, &graph, &constraints)?;
         }
     }
     let families = program.families.into_boxed_slice();

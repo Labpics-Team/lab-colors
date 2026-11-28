@@ -475,7 +475,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             inputs.extend_from_slice(&visible.inputs);
             target.appearance_inputs = inputs.into_boxed_slice();
             if target.declaration.reference_appearance {
-                visible.backdrop(index, appearance, &mut |target| marked.mark(target))?;
+                visible.backdrop(index, appearance, &mut |source| marked.mark(source))?;
             }
         }
         if let Some(input) = target.tone_input {
@@ -532,6 +532,16 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             )
         {
             group.mode = ProgramSelectionModeV1::OrderedReferenceV1;
+        }
+    }
+    if matches!(
+        program.assignment,
+        Some(ComputedSelectionPolicyV1::ReferenceComposition(_))
+    ) {
+        for group in &mut groups {
+            if group.mode == ProgramSelectionModeV1::OrderedReferenceV1 {
+                group.mode = ProgramSelectionModeV1::JointReferencePeersV1;
+            }
         }
     }
     let mut fixed = Vec::new();
@@ -655,6 +665,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             }
         }
         components.push(ComputedComponentV1 {
+            peer_graph: None,
             point_equivalence: None,
             mode,
             physical: physical_cone(
@@ -704,7 +715,10 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         .and_then(|budget| budget.checked_add(constant_check))
         .ok_or(ProgramCompileError::ResourceExhausted)?;
     for component in &mut components {
-        if component.mode == ProgramSelectionModeV1::JointPointV1 {
+        if matches!(
+            component.mode,
+            ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1
+        ) {
             component.point_equivalence = point_equivalence::compile(
                 selection,
                 component,
@@ -795,6 +809,14 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     {
         selection.execution_profile =
             contextual::point_search::execution_profile_identity(selection.budget);
+    }
+    if selection
+        .components
+        .iter()
+        .any(|c| c.mode == ProgramSelectionModeV1::JointReferencePeersV1)
+    {
+        selection.execution_profile =
+            contextual::reference_peer_profile_identity(selection.execution_profile);
     }
     Ok(())
 }
@@ -916,6 +938,7 @@ pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
             seen_inputs[input] = false;
         }
         components.push(ComputedComponentV1 {
+            peer_graph: None,
             point_equivalence: None,
             mode: component.mode,
             physical: physical_cone(
@@ -979,6 +1002,7 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     Ok(Some(ComputedComponentV1 {
+        peer_graph: None,
         point_equivalence: None,
         mode: component.mode,
         physical: physical_cone(
@@ -1016,6 +1040,7 @@ pub(super) fn merge_evidence(
         (CompletionV1::AuthoredExact, CompletionV1::AuthoredExact) => CompletionV1::AuthoredExact,
         _ => CompletionV1::Complete,
     };
+    left.numerical_order_unresolved |= right.numerical_order_unresolved;
     Ok(())
 }
 
@@ -1144,32 +1169,10 @@ impl VerifiedComponentV1 {
     pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
         match self.search.completion {
             CompletionV1::AuthoredExact => true,
-            CompletionV1::Complete => mode != ProgramSelectionModeV1::JointPointV1,
+            CompletionV1::Complete => !mode.symmetric() && !self.search.numerical_order_unresolved,
             CompletionV1::BudgetExhausted => false,
         }
     }
-}
-
-fn local_support<E: ProgramConstraintEvaluatorSetV1>(
-    component: &ComputedComponentV1,
-    scenarios: NonEmptyScenarioSetV1<'_>,
-) -> Result<Vec<ColorSignal>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let cases = contextual::local_case_order::<E>(component, scenarios, |_, _| {})?;
-    let count = cases
-        .len()
-        .checked_mul(component.inputs.len())
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut support = Vec::new();
-    support
-        .try_reserve_exact(count)
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    for case in cases {
-        let values = scenarios
-            .physical_values(case)
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        support.extend(component.inputs.iter().map(|&input| values[input]));
-    }
-    Ok(support)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1194,6 +1197,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::AuthoredExact,
+        numerical_order_unresolved: false,
         visited: 0,
         regions: 0,
         points: 0,
@@ -1238,7 +1242,8 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     for (index, component) in selection.components.iter().enumerate() {
-        let support = local_support::<E>(component, scenarios)?;
+        let local_observation = contextual::LocalObservationV1::prepare::<E>(component, scenarios)?;
+        let support = local_observation.support::<E>()?;
         let reusable =
             previous.filter(|previous| previous.components[index].support.as_ref() == support);
         let support = reusable.map_or_else(
@@ -1267,7 +1272,12 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                     .and_then(|reports| reports.get(cached.reports.clone()))
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                 Some(contextual::refresh_reports(
-                    selection, component, runtime, epoch, scenarios, &local, reports,
+                    selection,
+                    local_observation,
+                    runtime,
+                    epoch,
+                    &local,
+                    reports,
                 )?)
             };
             SearchResultV1 {
@@ -1283,7 +1293,12 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             local.extend_from_slice(&cached.values);
             let reference_selections = if let Some(reports) = cached.reports.as_deref() {
                 Some(contextual::refresh_reports(
-                    selection, component, runtime, epoch, scenarios, &local, reports,
+                    selection,
+                    local_observation,
+                    runtime,
+                    epoch,
+                    &local,
+                    reports,
                 )?)
             } else {
                 None
@@ -1294,7 +1309,10 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 evidence: cached.search,
                 reference_selections,
             }
-        } else if component.mode == ProgramSelectionModeV1::JointPointV1 {
+        } else if matches!(
+            component.mode,
+            ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1
+        ) {
             let mut prepared = contextual::reference_completion::prepare_selection(
                 epoch,
                 observation,
@@ -1306,21 +1324,33 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 }
                 _ => ProgramSessionEvaluationError::InternalInvariant,
             })?;
-            contextual::point_search::select_component(
-                selection,
-                component,
-                runtime,
-                epoch,
-                scenarios,
-                arena,
-                &mut prepared,
-            )?
+            match component.mode {
+                ProgramSelectionModeV1::JointPointV1 => contextual::point_search::select_component(
+                    selection,
+                    local_observation,
+                    runtime,
+                    epoch,
+                    arena,
+                    &mut prepared,
+                )?,
+                ProgramSelectionModeV1::JointReferencePeersV1 => {
+                    contextual::reference_search::select_component(
+                        selection,
+                        local_observation,
+                        runtime,
+                        epoch,
+                        arena,
+                        Some(&mut prepared),
+                    )?
+                }
+                _ => unreachable!("joint composition mode"),
+            }
         } else if component
             .targets
             .iter()
             .any(|&index| selection.targets[index].declaration.intent.is_some())
         {
-            contextual::select_component(selection, component, runtime, epoch, scenarios, arena)?
+            contextual::select_component(selection, local_observation, runtime, epoch, arena)?
         } else {
             select_component(selection, component, runtime, epoch, scenarios)?
         };
@@ -1397,6 +1427,7 @@ mod reuse_history_tests {
             values: vec![color],
             search: SearchEvidenceV1 {
                 completion: CompletionV1::Complete,
+                numerical_order_unresolved: false,
                 visited: 0,
                 regions: 0,
                 points: 0,
