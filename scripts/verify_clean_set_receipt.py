@@ -93,6 +93,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "classifier_tests": "crates/labcolors-core/src/clean_set_tests.rs",
     "colored_graph_source": "crates/labcolors-core/src/colored_graph.rs",
     "color_intent_source": "crates/labcolors-core/src/color_intent.rs",
+    "reference_transport_source": "crates/labcolors-core/src/color_intent/reference_transport.rs",
     "composition_executor_source": "crates/labcolors-core/src/composition.rs",
     "content_digest_source": "crates/labcolors-core/src/sha256.rs",
     "field_context_source": "crates/labcolors-core/src/field_context.rs",

@@ -147,33 +147,26 @@ impl UseCase {
 enum Preference {
     Point,
     Tone,
-    Transport(ReferenceTransportV1),
+    Transport {
+        model: ReferenceTransportV1,
+        case_start: usize,
+    },
 }
 
 impl Preference {
-    fn compile(target: &CompiledComputedTargetV1) -> Result<Self, ()> {
-        Ok(match target.preferred_intent() {
-            CompiledPreferredIntentV1::Point { tone: None, .. } => Self::Point,
-            CompiledPreferredIntentV1::Point { tone: Some(_), .. } => Self::Tone,
-            CompiledPreferredIntentV1::ImplicitReference => {
-                Self::Transport(ReferenceTransportV1::new(
-                    target.effective_anchor(),
-                    target.reference_backdrop.ok_or(())?,
-                ))
-            }
-        })
-    }
-
     fn lower_loss(
         self,
-        prepared: &mut UseCase,
+        cases: &mut [UseCase],
         context: &ContextV1<'_>,
         target: usize,
         case: usize,
+        row: usize,
         points: [RegionPointV1; 2],
     ) -> [f64; 3] {
         match self {
-            Self::Transport(model) => prepared.lower_bounds(context, model, target, points),
+            Self::Transport { model, case_start } => {
+                cases[case_start + row].lower_bounds(context, model, target, points)
+            }
             Self::Point | Self::Tone => {
                 let preferred = context.preferred[case * context.targets.len() + target];
                 let [lower, upper] = points;
@@ -183,7 +176,7 @@ impl Preference {
                 match self {
                     Self::Point => [0.0, 0.0, distance],
                     Self::Tone => [distance, 0.0, 0.0],
-                    Self::Transport(_) => unreachable!("point preference"),
+                    Self::Transport { .. } => unreachable!("point preference"),
                 }
             }
         }
@@ -256,7 +249,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> ContinuousProfiles<'_, '_, '_, '_, E> {
 
 pub(super) struct PeerProfiles<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
     continuous: ContinuousProfiles<'a, 'p, 'program, 'scratch, E>,
-    preferences: Vec<Preference>,
+    preferences: Vec<(usize, Preference)>,
     cases: Vec<UseCase>,
     // Machine lower scores rank traversal children only.
     current: Vec<f64>,
@@ -285,12 +278,34 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         preferences
             .try_reserve_exact(count)
             .map_err(|_| allocation(()))?;
-        for target in context.targets.iter() {
-            preferences.push(
-                Preference::compile(target)
-                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?,
-            );
+        let mut case_slots = 0_usize;
+        for (index, target) in context.targets.iter().enumerate() {
+            if !context.represents_target(index) {
+                continue;
+            }
+            let preference = match target.preferred_intent() {
+                CompiledPreferredIntentV1::Point { tone: None, .. } => Preference::Point,
+                CompiledPreferredIntentV1::Point { tone: Some(_), .. } => Preference::Tone,
+                CompiledPreferredIntentV1::ImplicitReference => {
+                    let case_start = case_slots;
+                    case_slots = case_slots
+                        .checked_add(context.local_cases.order.len())
+                        .ok_or_else(|| allocation(()))?;
+                    let backdrop = target
+                        .reference_backdrop
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    Preference::Transport {
+                        model: ReferenceTransportV1::new(target.effective_anchor(), backdrop),
+                        case_start,
+                    }
+                }
+            };
+            preferences.push((index, preference));
         }
+        let mut cases = Vec::new();
+        cases
+            .try_reserve_exact(case_slots)
+            .map_err(|_| allocation(()))?;
         let mut compiled_to_observed = buffer(count, usize::MAX).map_err(allocation)?;
         let mut observed_to_compiled = buffer(count, usize::MAX).map_err(allocation)?;
         let observed = context
@@ -320,7 +335,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                 source: Vec::new(),
             },
             preferences,
-            cases: Vec::new(),
+            cases,
             current: buffer(length, 0.0).map_err(allocation)?,
             candidate: buffer(length, zero()).map_err(allocation)?,
             best: buffer(length, zero()).map_err(allocation)?,
@@ -341,27 +356,22 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         self.incumbent.unresolved()
     }
 
-    pub(super) fn prepare(
-        &mut self,
-        context: &ContextV1<'_>,
-        points: &[AppearancePointV1],
-    ) -> Result<(), ()> {
+    pub(super) fn prepare(&mut self, context: &ContextV1<'_>, points: &[AppearancePointV1]) {
         let count = context.targets.len();
         let local_cases = &context.local_cases.order;
         if self.cases.is_empty() {
-            self.cases
-                .try_reserve_exact(count.checked_mul(local_cases.len()).ok_or(())?)
-                .map_err(|_| ())?;
-            for &case in local_cases {
-                for target in 0..count {
-                    self.cases.push(UseCase::new(
-                        points[case * count + target].backdrop,
-                        points[case * count + target].alpha,
-                    ));
+            for &(target, preference) in &self.preferences {
+                if let Preference::Transport { case_start, .. } = preference {
+                    debug_assert_eq!(case_start, self.cases.len());
+                    for &case in local_cases {
+                        self.cases.push(UseCase::new(
+                            points[case * count + target].backdrop,
+                            points[case * count + target].alpha,
+                        ));
+                    }
                 }
             }
         }
-        Ok(())
     }
 
     pub(super) fn consider(
@@ -372,18 +382,14 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
     ) -> Result<bool, EvaluationError<E>> {
         let count = values.len();
         let local_cases = &context.local_cases.order;
-        self.prepare(context, points)
-            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        self.prepare(context, points);
         self.candidate.fill(zero());
         let mut authored_transport_minimum = true;
-        for (row, &case) in self.cases.chunks_exact_mut(count).zip(local_cases) {
-            for (target, prepared) in row.iter_mut().enumerate() {
-                if !context.represents_target(target) {
-                    continue;
-                }
-                let Preference::Transport(model) = self.preferences[target] else {
-                    continue;
-                };
+        for &(target, preference) in &self.preferences {
+            let Preference::Transport { model, case_start } = preference else {
+                continue;
+            };
+            for (prepared, &case) in self.cases[case_start..].iter_mut().zip(local_cases) {
                 let point = points[case * count + target];
                 let [shortfall, distance] =
                     prepared.transport_loss(context.domains[target], model, point);
@@ -443,17 +449,14 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         context: &ContextV1<'_>,
         domain_at: impl Fn(usize) -> SourceBounds,
     ) -> Option<Ordering> {
-        let count = self.preferences.len();
+        let count = context.targets.len();
         let equal = |index: usize| {
             let (lo, hi) = domain_at(index);
             lo == hi && lo == self.best_values[index].bytes()
         };
         for tier in 0..4 {
             let mut used = 0;
-            for target in 0..count {
-                if !context.represents_target(target) {
-                    continue;
-                }
+            for &(target, _) in &self.preferences {
                 let same = if tier == 3 {
                     equal(target)
                 } else {
@@ -546,22 +549,20 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         let (shortfalls, distances) = remainder.split_at_mut(count);
         let (visible, source) = distances.split_at_mut(count);
         for &case in &refinement.cases {
-            let row = refinement.ranks[case] * count;
-            for (target, &preference) in self.preferences.iter().enumerate() {
-                if !context.represents_target(target) {
-                    continue;
-                }
+            let row = refinement.ranks[case];
+            for &(target, preference) in &self.preferences {
                 let [tone, shortfall, distance] = preference.lower_loss(
-                    &mut self.cases[row + target],
+                    &mut self.cases,
                     context,
                     target,
                     case,
+                    row,
                     points[case * count + target],
                 );
                 explicit[target] = explicit[target].max(tone);
                 shortfalls[target] = shortfalls[target].max(shortfall);
                 visible[target] = visible[target].max(distance);
-                if matches!(preference, Preference::Transport(_)) {
+                if matches!(preference, Preference::Transport { .. }) {
                     for (index, loss) in
                         [(count + target, shortfall), (2 * count + target, distance)]
                     {

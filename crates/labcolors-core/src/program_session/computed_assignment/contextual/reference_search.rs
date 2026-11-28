@@ -1757,9 +1757,7 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     let mut working = cloned(&authored).map_err(allocation)?;
     search.assess_tuple(runtime, epoch, scenarios, &mut working, arena)?;
     if let Some(peers) = &mut search.peers {
-        peers
-            .prepare(&search.context, &search.appearance)
-            .map_err(allocation)?;
+        peers.prepare(&search.context, &search.appearance);
     }
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
     if !search.authored_exact() && search.evidence.visited < search.budget {
